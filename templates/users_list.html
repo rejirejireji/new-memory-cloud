@@ -1,0 +1,62 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<script>
+	localStorage.setItem('page', 'users');
+</script>
+
+<div class="container-fluid p-0">
+	<h1 class="h3 mb-3">ユーザー</h1>
+	<!-- 1段目 -->
+	<div class="row">
+		<div class="col-12 col-md-12 col-xxl-12 d-flex">
+			<div class="card flex-fill w-100">
+				<div class="card-header">
+					<h5 class="card-title mb-0">一覧</h5>
+				</div>
+				<div class="card-body d-flex">
+					<table id="users_list" class="table table-striped">
+						<thead class="thead-dark">
+							<tr>
+								<th>名前</th>
+								<th>ID</th>
+								<th>メールアドレス</th>
+								<th>ログインタイプ</th>
+								<th>権限</th>
+							</tr>
+						</thead>
+						<tbody>
+							{% for object in objects %}
+							<tr>
+								<td>{{ object.name }}</td>
+								<td>{{ object.id }}</td>
+								<td>{{ object.email }}</td>
+								<td>{{ object.type }}</td>
+								<td>{{ object.role }}</td>
+							</tr>
+							{% endfor %}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+<link href="https://cdn.jsdelivr.net/npm/simple-datatables@6.0/dist/style.css" rel="stylesheet" type="text/css">
+<script src="https://cdn.jsdelivr.net/npm/simple-datatables@6.0" type="text/javascript"></script>
+<script>
+	new simpleDatatables.DataTable("#list", {
+		fixedColumns: true,
+		perPage: 20,
+		perPageSelect: false,
+		labels: {
+			placeholder: "検索...",
+			searchTitle: "Search within table",
+			noRows: "データがありません。",
+			info: "{start} - {end} 件 / {rows} 件",
+			noResults: "該当するデータがありません。",
+		}
+	})
+</script>
+{%- endblock %}

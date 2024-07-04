@@ -1,0 +1,196 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<script>
+	localStorage.setItem('page', 'movies');
+
+	// 読み込み時
+	window.addEventListener('load', () => {
+		const loadingElement = document.getElementById('loading');
+		// ボタン要素リスト
+		let btns = document.querySelectorAll('button.btn');
+		// MutationObserver: 変化判定用要素（テーブル）
+		const trig = document.querySelector('table#list');
+		// MutationObserver
+		const observer = new MutationObserver((mutations) => {
+			// ボタン要素リスト再取得
+			btns = document.querySelectorAll('button.btn');
+			// 各ボタンにイベントリスナ（クリック）再設定
+			for (btn of btns) {
+				btn.removeEventListener('click', btn_click)
+				btn.addEventListener('click', btn_click)
+			}
+		});
+
+		// MutationObserver: オプション
+		const config = {
+			characterData: true,
+			subtree: true,
+			attributes: true,
+			childList: true
+		};
+
+		// MutationObserver: 設置
+		observer.observe(trig, config);
+
+		// 各ボタンにイベントリスナ（クリック）初期設定
+		for (btn of btns) {
+			btn.addEventListener('click', btn_click)
+		}
+
+		// ボタンクリック時関数
+		function btn_click(e) {
+			// クリックボタン要素
+			const clickelm = e.target;
+			// クリックボタンID（data属性から取得）
+			const id = clickelm.dataset.objectid;
+			loadingElement.style.display = 'block';
+
+			// APIコール
+			fetch('/ajax/delete', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({ id: id }),
+			})
+				// レスポンス受信
+				.then(response => {
+					// レスポンス異常
+					if (!response.ok) {
+						loadingElement.style.display = 'none';
+						throw new Error('Network Error:' + response.statusText);
+					}
+					// レスポンス正常
+					return response.json();
+				})
+				// レスポンスデータ取得
+				.then(data => {
+					console.log('Success:', data);
+					location.reload(); // レスポンスが正常ならリロード
+				})
+				// エラーハンドリング
+				.catch((error) => {
+					loadingElement.style.display = 'none';
+					console.error('Error:', error);
+				});
+		}
+	});
+</script>
+
+<div class="container-fluid p-0">
+	<h1 class="h3 mb-3">アップロード済み</h1>
+	<div class="row">
+		<div class="col-12 col-md-12 col-xxl-12 d-flex">
+			<div class="card flex-fill w-100">
+				<div class="card-header">
+					<h5 class="card-title mb-0">一覧</h5>
+				</div>
+				<div class="card-body d-flex">
+					<table id="list" class="table table-striped">
+						<thead class="thead-dark">
+							<tr>
+								<th data-sortable="false">サムネイル</th>
+								<th>ファイル名</th>
+								<th>ステータス</th>
+								<th>議事録作成日時</th>
+								<th>収録日</th>
+								<th data-sortable="false" colspan="2"></th>
+							</tr>
+						</thead>
+						<tbody>
+							{% for object in objects %}
+							<tr>
+								<td>
+									{% if object.thumbnailLink %}
+									<img src="{{ object.thumbnailLink }}" height="50px">
+									{% else %}
+									<img src="{{ url_for('static', filename='loading.png') }}" height="50px">
+									{% endif %}
+								</td>
+								<td><a href="./video/{{ object.id }}">{{ object.name }}</a></td>
+								<td>
+									{% if object.status == 'Complete' %}
+									<span>
+										<i class="material-icons" data-status="{{ object.status }}">grading</i>
+									</span>
+									議事録作成済み
+									{% elif object.status == 'Unprocessed' %}
+									<span>
+										<i class="material-icons" data-status="{{ object.status }}">do_not_disturb_on</i>
+									</span>
+									処理待ち
+									{% elif object.status == 'uploading' %}
+									<span>
+										<i class="material-icons" data-status="{{ object.status }}">pending</i>
+									</span>
+									アップロード中
+									{% elif object.status == 'Encode' %}
+									<span>
+										<i class="material-icons" data-status="{{ object.status }}">pending</i>
+									</span>
+									エンコード中
+									{% elif object.status == 'Transcript' %}
+									<span>
+										<i class="material-icons" data-status="{{ object.status }}">pending</i>
+									</span>
+									書き起こし中
+									{% elif object.status == 'Timecode' %}
+									<span>
+										<i class="material-icons" data-status="{{ object.status }}">pending</i>
+									</span>
+									タイムコード生成中
+									{% elif object.status == 'Summarize' %}
+									<span>
+										<i class="material-icons" data-status="{{ object.status }}">pending</i>
+									</span>
+									議事録作成中
+									{% elif object.status == 'uploaded' %}
+									<span>
+										<i class="material-icons" data-status="{{ object.status }}">check_circle</i>
+									</span>
+									アップロード完了
+									{% elif object.status == 'failed' %}
+									<span>
+										<i class="material-icons" data-status="{{ object.status }}">check_circle</i>
+									</span>
+									エラー
+									{% endif %}
+								</td>
+								<td>{{ object.created_at }}</td>
+								<td>{{ object.date }}</td>
+								<td>
+									<button data-objectid="{{ object.id }}" class="delete-action btn btn-outline-danger btn-sm" type="submit">削除</button>
+								</td>
+							</tr>
+							{% endfor %}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+<!-- ローディングアニメーション -->
+<div id="loading" class="loading" style="display: none;">
+	<div class="spinner"></div>
+</div>
+
+<link href="https://cdn.jsdelivr.net/npm/simple-datatables@6.0/dist/style.css" rel="stylesheet" type="text/css">
+<script src="https://cdn.jsdelivr.net/npm/simple-datatables@6.0" type="text/javascript"></script>
+<script>
+	new simpleDatatables.DataTable("#list", {
+		fixedColumns: true,
+		perPage: 20,
+		perPageSelect: false,
+		labels: {
+			placeholder: "検索...",
+			searchTitle: "Search within table",
+			noRows: "データがありません。",
+			info: "{start} - {end} 件 / {rows} 件",
+			noResults: "該当するデータがありません。",
+		}
+	})
+</script>
+{%- endblock %}

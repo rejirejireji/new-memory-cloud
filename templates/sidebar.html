@@ -1,0 +1,35 @@
+		<!-- サイドバー -->
+		<nav id="sidebar" class="sidebar js-sidebar">
+			<div class="sidebar-content js-simplebar">
+				<div class="sidebar-brand">
+					<img id="logo" class="align-middle" src="{{ url_for('static', filename='logo.svg') }}" alt="メモリークラウド">
+				</div>
+
+				<ul class="sidebar-nav">
+					<!-- <li class="sidebar-header">
+						管理
+					</li> -->
+
+					<li class="sidebar-item" data-itemname="home">
+						<a class="sidebar-link" href="/home">
+							<i class="align-middle" data-feather="home"></i> <span class="align-middle">Home</span>
+						</a>
+					</li>
+					<li class="sidebar-item" data-itemname="movies">
+						<a class="sidebar-link" href="/movies">
+							<i class="align-middle" data-feather="video"></i> <span class="align-middle">Movies</span>
+						</a>
+					</li>
+					<li class="sidebar-item" data-itemname="sharing">
+						<a class="sidebar-link" href="/sharing">
+							<i class="align-middle" data-feather="share"></i> <span class="align-middle">Sharing</span>
+						</a>
+					</li>
+					<li class="sidebar-item" data-itemname="shared">
+						<a class="sidebar-link" href="/shared">
+							<i class="align-middle" data-feather="share-2"></i> <span class="align-middle">Shared</span>
+						</a>
+					</li>
+				</ul>
+			</div>
+		</nav>

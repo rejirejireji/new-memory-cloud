@@ -1,0 +1,122 @@
+{% extends "layout.html" %}
+
+
+{% block content %}
+<script>
+	localStorage.setItem('page', 'home');
+	const chooseFile = () =>
+		new Promise(resolve => {
+			const input = document.createElement('input')
+			input.setAttribute('type', 'file')
+			input.setAttribute('accept', '.mp4,.m4a,.mp3')
+			input.style.display = 'none'
+			document.body.appendChild(input)
+
+			input.addEventListener('change', () => {
+				const f = input.files[0]
+				document.body.removeChild(input)
+				resolve(f)
+			})
+			input.click()
+		})
+	window.addEventListener('load', () => {
+		const upload = document.querySelector('button#upload');
+		const comment = document.querySelector('p#comment');
+
+		// DOMロードチェック（ボタン要素）
+		if (upload) {
+			upload.addEventListener('click', evt => {
+				// ファイル選択後
+				chooseFile().then(f => {
+					upload_file(f)
+				})
+			})
+		}
+	});
+
+	function upload_file(file) {
+		const MAX_SIZE_MB = 400;
+		const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
+
+		// ファイルサイズチェック
+		if (file.size > MAX_SIZE_BYTES) {
+			alert(`ファイルサイズは${MAX_SIZE_MB}MBを超えてはいけません。`);
+			return;
+		}
+		
+		// アップロード
+		const percent = document.querySelector('span#percent');
+		const progress = document.querySelector('progress');
+		const header = document.querySelector('div#v_header');
+		const container = document.querySelector('div#v_container');
+
+		const body = new FormData()
+		const xhr = new XMLHttpRequest()
+		body.append('file', file)
+
+		// 進捗表示
+		progress.style.display = 'block';
+		percent.style.display = 'block';
+
+		// 進捗更新
+		xhr.upload.addEventListener('progress', (evt) => {
+			const p = (evt.loaded / evt.total * 100).toFixed(1);
+			percent.innerText = `${p}%`
+			document.getElementById("prg").value = p
+		});
+
+		xhr.open('post', '/ajax/upload')
+
+		// アップロード完了後
+		xhr.onload = () => {
+			try {
+				if (JSON.parse(xhr.responseText).message != 'error') {
+					console.log('%o', JSON.parse(xhr.responseText));
+					window.location.href = '/movies';
+				}
+				else {
+					alert("非対応ファイル or ファイルなし");
+					return 0;
+				}
+			}
+			catch (e) {
+				alert("アップロードエラー => " + xhr.responseText)
+			}
+		}
+		xhr.onabort = () => {
+			alert("アップロードエラー => " + xhr.responseText)
+		}
+		xhr.ontimeout = () => {
+			alert("アップロードエラー => " + xhr.responseText)
+		}
+		xhr.onerror = () => {
+			alert("アップロードエラー => " + xhr.responseText)
+		}
+
+		xhr.send(body)
+	}
+
+</script>
+
+<div class="container-fluid p-0">
+	<h1 class="h3 mb-3">議事録作成</h1>
+	<!-- 1段目 -->
+	<div class="row">
+		<div class="col-12 col-sm-12 col-md-12 col-xl-6 col-xxl-6 d-flex">
+			<div class="card flex-fill w-100">
+				<div id="v_header" class="card-header mb-3 mt-4 center">
+					<h5 class="card-title mb-0">動画ファイルをアップロードしてください。（400MBまで）</h5>
+				</div>
+				<div class="card-body center mb-3 d-flex flex-row">
+					<form method="post" enctype="multipart/form-data" action="">
+						<button type="button" class="btn btn-primary" id="upload">ファイル選択</button>
+					</form>
+					<progress id="prg" value="0" max="100"></progress>
+					<span id="percent">0%</span>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+
+{%- endblock %}

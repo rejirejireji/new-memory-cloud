@@ -1,0 +1,54 @@
+<!-- ナビゲーションバー -->
+<script>
+	window.addEventListener('load', () => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('get', '/ajax/user');
+		xhr.onload = () => {
+			if (xhr.responseText) {
+				const res = JSON.parse(xhr.responseText);
+				const icon = document.getElementById('icon');
+				const username = document.getElementById('username');
+				icon.setAttribute('src', res.pic);
+				username.innerText = res.name;
+				icon.style.display = 'unset';
+				username.style.display = 'unset';
+				if(res.role == 'admin'){
+					icon.setAttribute('data-isadmin', 'true');
+				}
+			}
+		}
+
+		xhr.send()
+	});
+</script>
+
+<nav class="navbar navbar-expand navbar-light navbar-bg">
+	<!-- ハンバーガーボタン -->
+	<a class="sidebar-toggle js-sidebar-toggle">
+		<i class="hamburger align-self-center"></i>
+	</a>
+
+	<!-- ユーザーボタン -->
+	<div class="navbar-collapse collapse">
+		<ul class="navbar-nav navbar-align">
+			<li class="nav-item dropdown">
+
+				<a class="nav-icon dropdown-toggle d-inline-block d-sm-none" href="#" data-bs-toggle="dropdown">
+					<i class="align-middle" data-feather="settings"></i>
+				</a>
+
+				<a class="nav-link dropdown-toggle d-none d-sm-inline-block" href="#" data-bs-toggle="dropdown">
+					<img id="icon" src="" class="avatar img-fluid rounded-circle me-1" alt="icon" />
+					<span id="username" class="text-dark"></span>
+				</a>
+
+				<div class="dropdown-menu dropdown-menu-end">
+					<a class="dropdown-item" href="#"><i class="align-middle me-1" data-feather="settings"></i>設定</a>
+					<div class="dropdown-divider"></div>
+					<a class="dropdown-item" href="/logout">ログアウト</a>
+				</div>
+
+			</li>
+		</ul>
+	</div>
+</nav>

@@ -1,0 +1,22 @@
+{% include "header.html" %}
+
+<form method="post" action="/login" id="login-form">
+  <div class="heading">メモリークラウド</div>
+  <!-- <div class="left">
+    <label for="username">ユーザー名</label> <br />
+    <input type="text" name="username" id="username" /> <br />
+    <label for="password">パスワード</label> <br />
+    <input type="password" name="password" id="password" /> <br />
+    <input type="submit" value="ログイン" />
+  </div> -->
+  <div class="center">
+    <div class="connect center text-center">Googleでログイン</div>
+    <div id="googlebtn">
+      <a href="{{url_for('google.login')}}">
+        <img src="{{ url_for('static', filename='google_pressed.png') }}" id="google_pressed">
+        <img src="{{ url_for('static', filename='google_hover.png') }}" id="google_hover">
+        <img src="{{ url_for('static', filename='google.png') }}" id="google">
+      </a>
+    </div>
+  </div>
+</form>

@@ -1,0 +1,39 @@
+{% include "header.html" %}
+
+<body>
+
+  <div class="wrapper">
+
+    {% include "sidebar.html" %}
+
+    <div class="main">
+
+      {% include "navbar.html" %}
+
+      <main class="content">
+
+        {% block content %}{% endblock %}
+
+      </main>
+
+      {% include "footer.html" %}
+
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  
+  <script>
+    document.addEventListener('DOMContentLoaded',
+      function () {
+        const items = document.querySelectorAll('.sidebar-item')
+        for (item of items) {
+          if(item.dataset.itemname == localStorage.getItem('page')){
+            item.classList.add('active');
+          }
+        }
+      }
+    );</script>
+</body>
+
+</html>

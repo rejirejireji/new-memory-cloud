@@ -1,0 +1,464 @@
+{% extends "layout.html" %}
+
+
+{% block content %}
+<script>
+	localStorage.setItem('page', 'movies');
+
+	document.addEventListener('DOMContentLoaded', (event) => {
+
+		const loadingElement = document.getElementById('loading');
+		const modalElement = document.getElementById('Modal');
+		const modalInstance = new bootstrap.Modal(modalElement);
+		const sharebtnElement = document.getElementById('sharebtn');
+		const delbtnElement = document.getElementById('deletebtn');
+		const id = '{{ data.id }}';
+
+		delbtnElement.addEventListener('click', delete_click)
+
+		// 削除ボタンクリック時関数
+		function delete_click(e) {
+			loadingElement.style.display = 'block';
+			// APIコール
+			fetch('/ajax/delete', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({ id: id }),
+			})
+				// レスポンス受信
+				.then(response => {
+					// レスポンス異常
+					if (!response.ok) {
+						loadingElement.style.display = 'none';
+						alert('Network Error:' + response.statusText);
+					}
+					// レスポンス正常
+					return response.json();
+				})
+				// レスポンスデータ取得
+				.then(data => {
+					console.log('Success:', data);
+					window.location.href = '/movies';
+				})
+				// エラーハンドリング
+				.catch((error) => {
+					loadingElement.style.display = 'none';
+					console.error('Error:', error);
+				});
+		}
+
+		// shareボタンクリック => モーダルOPEN
+		sharebtnElement.addEventListener('click', (e) => {
+			modalInstance.show()
+		})
+
+		const input = document.querySelector('#email');
+		new Tagify(input, {
+			pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, // Eメールのバリデーション用パターン
+			maxTags: 10,
+			dropdown: {
+				maxItems: 20,           // 最大表示アイテム数
+				classname: "tags-look", // タグのスタイルをカスタム
+				enabled: 0,             // 0を設定するとすべてのタグが初めから表示される
+				closeOnSelect: false    // タグ選択後にドロップダウンを閉じない
+			}
+		});
+
+		// 共有ボタンクリック => 送信
+		document.getElementById('share').addEventListener('submit', function (event) {
+			// 初期化
+			event.preventDefault();
+
+			// 共有ボタン無効化
+			const confirmButton = document.getElementById('confirmbtn');
+			confirmButton.disabled = true;
+
+			// ローディングアニメーションを表示
+			loadingElement.style.display = 'block';
+
+			// Emailアドレス
+			const email = document.getElementById('email').value;
+
+			// POSTリクエスト
+			fetch(window.location.pathname, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({ email: email }) // Tagifyからのデータを使用
+			})
+				// レスポンス処理
+				.then(response => response.json())
+				.then(data => {
+					// モーダル閉じる
+					closeModal();
+					// ボタン復活
+					confirmButton.disabled = false;
+					// ローディングアニメーション停止
+					loadingElement.style.display = 'none';
+
+					// 共有結果の処理
+					data.forEach(result => {
+						if (result.status === 'success') {
+							showToast(`動画を ${result.email} に共有しました`, 'success');
+						} else if (result.status === 'duplicate') {
+							showToast(`${result.email} は既に共有されています`, 'warning');
+						} else {
+							showToast(`${result.email} への共有に失敗しました: ${result.message}`, 'error');
+						}
+					});
+				})
+				.catch((error) => {
+					// エラーハンドリング
+					closeModal();
+					confirmButton.disabled = false;
+					loadingElement.style.display = 'none';
+					showToast(error, 'error');
+				});
+		});
+
+		// モーダル閉じる関数
+		function closeModal() {
+			modalInstance.hide();
+		}
+
+		// トースト表示する関数
+		function showToast(text, type) {
+			// 新しいトースト要素の作成
+			const newToast = document.createElement("div");
+			newToast.classList.add("toast", "align-items-center", "border-0");
+			newToast.role = "alert";
+			newToast.ariaLive = "assertive";
+			newToast.ariaAtomic = "true";
+
+			// トーストの背景色を設定
+			newToast.classList.add(type === 'success' ? 'text-bg-primary' :
+				type === 'error' ? 'text-bg-danger' :
+					'text-bg-warning');
+
+			// トーストの内容を設定
+			newToast.innerHTML = `
+					<div class="d-flex">
+							<div class="toast-body">${text}</div>
+							<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+					</div>
+			`;
+
+			// トーストコンテナにトーストを追加
+			const toastContainer = document.querySelector('.toast-container');
+			toastContainer.appendChild(newToast);
+
+			// トーストを表示
+			const toastInstance = new bootstrap.Toast(newToast);
+			toastInstance.show();
+
+			// トーストが閉じたらDOMから削除
+			newToast.addEventListener('hidden.bs.toast', function () {
+				newToast.remove();
+			});
+		}
+	});
+
+</script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js" integrity="sha256-Huqxy3eUcaCwqqk92RwusapTfWlvAasF6p2rxV6FJaE=" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/l10n/ja.js" integrity="sha256-us400PA8+wpkgAkYwnKn7ueJbkk00UuwAcqrHqLGQJw=" crossorigin="anonymous"></script>
+
+<div class="container-fluid p-0">
+	<!-- モーダル -->
+	<div class="modal micromodal-slide" id="modal-1" aria-hidden="true">
+		<div class="modal__overlay" tabindex="-1">
+			<div class="modal__container" role="dialog" aria-modal="true" aria-labelledby="modal-1-title">
+
+				<form method="post" action="/ajax/editcomment" name="comment" id="comment">
+					<header class="modal__header">
+						<h2 class="modal__title" id="modal-1-title">
+							コメント
+						</h2>
+						<button class="modal__close" aria-label="Close modal" data-micromodal-close></button>
+					</header>
+
+					<main class="modal__content" id="modal-1-content">
+						<textarea wrap="hard" cols="130" rows="15" name="comment" form="comment">{{data.comment_raw}}</textarea>
+					</main>
+
+					<footer class="modal__footer">
+						<input type="hidden" name="id" value="{{ data.id }}">
+						<input type="submit" class="modal__btn modal__btn-primary" value="登録">
+					</footer>
+				</form>
+
+			</div>
+		</div>
+	</div>
+
+	<h1 class="h3 mb-3">{{data.title}}</h1>
+
+	<div class="row">
+		<!-- 最左列：上下二段 -->
+		<div class="col-xl-4 col-xxl-4">
+			<!-- 上段：ビデオ -->
+			<div class="card flex-fill w-100">
+				<div id="v_container" class="card-body center mb-3 d-flex flex-row">
+					<video width="100%" controls preload="auto">
+						<source src="/stream/{{ data.id }}" type="video/mp4">
+						Your browser does not support the video tag.
+					</video>
+				</div>
+				<div class="card-body d-flex">
+					<table>
+						<tbody>
+							<tr>
+								<th>収録日</th>
+								<td>
+									<form method="post" action="/ajax/changedate" name="dateform" id="date">
+										<input type="input" id="datepicker" value="{{data.date}}" name="date">
+									</form>
+									<script>
+										flatpickr('#datepicker', {
+											locale: 'ja',
+											dateFormat: 'Y-m-d',
+											onValueUpdate: function (selectedDates, dateStr, instance) {
+												const loadingElement = document.getElementById('loading');
+												const id = '{{ data.id }}';
+												loadingElement.style.display = 'block';
+												// APIコール
+												fetch('/ajax/changedate', {
+													method: 'POST',
+													headers: {
+														'Content-Type': 'application/json',
+													},
+													body: JSON.stringify({ id: id, date: dateStr }),
+												})
+													// レスポンス受信
+													.then(response => {
+														// レスポンス異常
+														if (!response.ok) {
+															loadingElement.style.display = 'none';
+															alert('Network Error:' + response.statusText);
+														}
+														// レスポンス正常
+														return response.json();
+													})
+													// レスポンスデータ取得
+													.then(data => {
+														console.log('Success:', data);
+														location.reload(); // レスポンスが正常ならリロード
+													})
+													// エラーハンドリング
+													.catch((error) => {
+														loadingElement.style.display = 'none';
+														console.error('Error:', error);
+													});
+											}
+										});
+									</script>
+								</td>
+								<!-- <td>{{ data.date }}</td> -->
+							</tr>
+							<tr>
+								<th>議事録作成日時</th>
+								<td>{{ data.created_at }}</td>
+							</tr>
+							<tr>
+								<th>動画ID</th>
+								<td>{{ data.id }}</td>
+							</tr>
+							<tr>
+								<th>ステータス</th>
+								<td>{{ data.status }}</td>
+							</tr>
+							<tr>
+								<th></th>
+								<td class="pt-3">
+									<!-- <button type="button" class="btn btn-outline-success">Download text</button> -->
+									<button type="button" class="btn btn-outline-danger" id="deletebtn">Delete</button>
+									<button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#Modal" id="sharebtn">Share</button>
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+			</div>
+			<!-- 下段：ステータス -->
+			<div class="card flex-fill w-100 mt-3">
+				<div class="card-header">
+					<h5 class="card-title mb-0">コメント</h5>
+					<button data-micromodal-trigger="modal-1" class="modal-open" id="btn_comment"><i class="align-middle" data-feather="edit"></i></button>
+				</div>
+				<div class="card-body d-flex">
+					<p>{{data.comment}}</p>
+				</div>
+			</div>
+		</div>
+
+		<!-- 中列：要約 -->
+		<div class="col-xl-4 col-xxl-4 d-flex flex-column">
+			<div class="card flex-fill w-100">
+				<div class="card-header">
+					<h5 class="card-title mb-0">要約</h5>
+					<button id="edit-button"><i class="align-middle" data-feather="edit"></i></button>
+				</div>
+				<div class="card-body d-flex" id="summary">
+					<p>{{data.summary}}</p>
+				</div>
+			</div>
+		</div>
+
+		<link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+		<script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
+		<script src="https://cdn.jsdelivr.net/npm/turndown@5.0.3/dist/turndown.js"></script>
+
+		<script>
+			let quillInstance = null;
+			const editButton = document.getElementById('edit-button');
+
+			editButton.addEventListener('click', function () {
+				if (!quillInstance) {
+					// Quillエディタのインスタンスを作成
+					quillInstance = new Quill('#summary', {
+						theme: 'snow'
+					});
+
+					// ボタンの内容を「編集完了」に変更
+					editButton.innerHTML = '編集完了';
+					editButton.classList = 'btn btn-outline-primary'; // この行は削除または変更
+					editButton.id = 'complete-edit'; // この行は削除または変更
+
+				} else {
+					// エディタの内容をHTMLとして取得
+					const content = quillInstance.root.innerHTML;
+
+					// HTMLをマークダウンに変換
+					const turndownService = new TurndownService();
+
+					// インデントの深さを判断し、適切な数のタブを追加するカスタムルール
+					turndownService.addRule('listItemIndent', {
+						filter: ['li'],
+						replacement: function (content, node) {
+							let bullet = '-';
+							const parentNode = node.parentNode;
+							const parentTagName = parentNode.nodeName.toLowerCase();
+							let prefix = '';
+							let indent = '';
+							let suffix = '';
+
+							// 親がOLの場合、正しい番号付けを行う
+							if (parentTagName === 'ol') {
+								const start = parentNode.getAttribute('start');
+								const index = Array.prototype.indexOf.call(parentNode.children, node);
+								bullet = `${start ? parseInt(start, 10) + index : index + 1}.`;
+							}
+
+							// インデントの深さを計算（ql-indent-x クラスを基に）
+							const indentClass = Array.from(node.classList).find(className => className.startsWith('ql-indent-'));
+							if (indentClass) {
+								const indentLevel = parseInt(indentClass.split('-').pop(), 10);
+								indent = '    '.repeat(indentLevel); // 1レベルのインデントにつきスペース2つを使用
+							}
+
+							// ネストされたリストアイテムの場合、接頭辞として改行を追加
+							if (parentNode.parentNode.nodeName.toLowerCase() === 'li') {
+								prefix = '\n';
+							} else {
+								// ルートレベルのリストアイテムの場合、接頭辞として2つの改行を追加（Markdownではリストの前に空行が必要）
+								prefix = '\n\n';
+							}
+
+							// コンテンツが複数の段落にまたがる場合、接尾辞として改行を追加
+							if (content.includes('\n')) {
+								suffix = '\n';
+							}
+
+							// リストアイテムのマークダウンを構築
+							return `${prefix}${indent}${bullet} ${content.trim()}${suffix}`;
+						}
+					});
+
+					const markdown = turndownService.turndown(content);
+
+					// マークダウンをサーバにPOST
+					fetch('/ajax/editsummary', {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json'
+						},
+						body: JSON.stringify({ id: "{{ data.id }}", summary: markdown })
+					}).then(function (response) {
+						// エディタを破棄
+						quillInstance = null;
+						location.reload(); // レスポンスが正常ならリロード
+					});
+				}
+			});
+
+
+
+		</script>
+
+		<!-- 右列：書き起こし -->
+		<div class="col-xl-4 col-xxl-4 d-flex flex-column">
+			<div class="card flex-fill w-100">
+				<div class="card-header">
+					<h5 class="card-title mb-0">書き起こし</h5>
+				</div>
+				<div class="card-body d-flex">
+					<p>{{data.transcript}}</p>
+				</div>
+			</div>
+		</div>
+	</div>
+
+</div>
+
+<!-- モーダル -->
+<div class="modal fade" id="Modal" tabindex="-1" aria-labelledby="ModalLabel" aria-hidden="true">
+	<div class="modal-dialog modal-dialog-centered">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h1 class="modal-title fs-5" id="ModalLabel">議事録の共有</h1>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<form method="post" action="" name="share" id="share">
+				<div class="modal-body">
+					<div class="mb-3">
+						<label for="email" class="col-form-label">メールアドレス:</label>
+						<input type="text" class="form-control" id="email" name="email">
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">閉じる</button>
+					<button type="submit" class="btn btn-primary" id="confirmbtn">共有</button>
+				</div>
+			</form>
+		</div>
+	</div>
+</div>
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+	<div id="Toast" class="toast align-items-center border-0" role="alert" aria-live="assertive" aria-atomic="true">
+		<div class="d-flex">
+			<div class="toast-body" id="Toastcontent">
+			</div>
+			<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+		</div>
+	</div>
+</div>
+
+<script src="https://unpkg.com/micromodal/dist/micromodal.min.js"></script>
+<script>
+	MicroModal.init({
+		disableScroll: true,
+		awaitOpenAnimation: true,
+		awaitCloseAnimation: true
+	});
+</script>
+
+<!-- ローディングアニメーション -->
+<div id="loading" class="loading" style="display: none;">
+	<div class="spinner"></div>
+</div>
+
+
+{%- endblock %}

@@ -65,12 +65,12 @@ db = SQLAlchemy(app)
 blueprint = make_google_blueprint(
     client_id=app.config["CLIENT_ID"],
     client_secret=app.config["CLIENT_SECRET"],
-    redirect_url="https://memorycloud.app/google/authorized",
+    redirect_url="https://mc.omoshirotalk.com/google/authorized",
     scope=[
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
-        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/drive.file",
     ],
     offline=True,
     reprompt_consent=True,

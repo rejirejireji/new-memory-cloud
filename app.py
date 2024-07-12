@@ -71,6 +71,7 @@ blueprint = make_google_blueprint(
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
         "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive.readonly"
     ],
     offline=True,
     reprompt_consent=True,
@@ -300,21 +301,25 @@ def movies():
     # ユーザー情報取得
     user = get_userdata()
 
-    # Googleドライブフォルダ情報取得
-    drive = google.get(
-        f"/drive/v3/files?q=mimeType+contains+%27video%2F%27+or+mimeType+contains+%27audio%2F%27+and+%27me%27+in+owners+and+%27{user.folder_id}%27+in+parents+and+trashed%3Dfalse&fields=files%28id%2Cname%2CmimeType%2CthumbnailLink%29"
+    # ユーザーがアップロードしたファイルのリストを取得
+    drive_response = google.get(
+        "/drive/v3/files",
+        params={
+            "q": "mimeType contains 'video/' or mimeType contains 'audio/'",
+            "fields": "files(id,name,mimeType,thumbnailLink)"
+        }
     )
-    drive_data = drive.json()
+    own_files = drive_response.json().get('files', [])
 
     # SummaryDBのデータ取得
     db_data = db.session.query(
         Summary.id, Summary.status, Summary.created_at, Summary.date
-    ).all()
+    ).filter(Summary.userid == user.id).all()
 
     # 返却用リスト
     result_list = []
 
-    for f in drive_data["files"]:
+    for f in own_files:
         # ステータス情報取得
         record = next((r for r in db_data if f["id"] == r.id), None)
 
@@ -378,39 +383,56 @@ def sharing():
 @app.route("/shared", methods=["GET"])
 @login_required
 def shared():
-    # ユーザー情報取得
     user = get_userdata()
-
-    # 共有リストDB確認
     sharedlist = db.session.query(Share).filter(Share.guest_email == user.email)
     videos = []
-    for video in sharedlist:
-        # ファイル情報取得
-        res = google.get(
-            f"/drive/v3/files/{video.video_id}?fields=id%2Cname%2CthumbnailLink"
-        )
-        # GoogleDriveエラー
-        if res.status_code != 200:
-            continue  # スキップ
 
-        video_data = res.json()
-        video_details = (
-            db.session.query(Summary, User)
-            .join(User, User.id == Summary.userid)
-            .filter(Summary.id == video.video_id)
-            .first()
-        )
-        if video_details:
-            summary_data, user_data = video_details
-            video_data["owner"] = user_data.name
-            video_data["shared_id"] = video.shared_id
-            video_data["created"] = summary_data.created_at
-            video_data["date"] = summary_data.date
-            videos.append(video_data)
-        # SummaryDBエラー
-        else:
-            continue  # スキップ
+    for share in sharedlist:
+        try:
+            # ファイルのメタデータを取得
+            metadata_response = google.get(
+                f"/drive/v3/files/{share.video_id}",
+                params={"fields": "id,name,mimeType,thumbnailLink,shared,permissions"}
+            )
+            
+            if metadata_response.status_code != 200:
+                print(f"Failed to get metadata for file {share.video_id}: {metadata_response.status_code}")
+                print(f"Response content: {metadata_response.text}")
+                continue
 
+            metadata = metadata_response.json()
+            
+            # ファイルが共有されていることを確認
+            if not metadata.get('shared'):
+                print(f"File {share.video_id} is not shared")
+                continue
+
+            # ユーザーの権限を確認
+            user_has_permission = any(
+                perm['emailAddress'] == user.email for perm in metadata.get('permissions', [])
+                if 'emailAddress' in perm
+            )
+            if not user_has_permission:
+                print(f"User does not have permission for file {share.video_id}")
+                continue
+
+            # Summaryテーブルからデータ取得
+            summary_data = db.session.query(Summary).filter(Summary.id == share.video_id).first()
+            
+            if summary_data:
+                metadata["owner"] = db.session.query(User.name).filter(User.id == summary_data.userid).scalar()
+                metadata["shared_id"] = share.shared_id
+                metadata["created"] = summary_data.created_at
+                metadata["date"] = summary_data.date
+                videos.append(metadata)
+            else:
+                print(f"No summary data found for file {share.video_id}")
+            
+        except Exception as e:
+            print(f"Error processing shared file {share.video_id}: {str(e)}")
+            continue
+
+    print(f"Total shared videos found: {len(videos)}")
     return render_template("shared.html", objects=videos)
 
 

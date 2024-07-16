@@ -36,6 +36,7 @@ import slackweb
 from pprint import pprint
 from functools import wraps
 from dotenv import load_dotenv
+from flask_caching import Cache
 
 load_dotenv("/var/www/html/app/.env")
 pymysql.install_as_MySQLdb()
@@ -71,7 +72,7 @@ blueprint = make_google_blueprint(
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
         "https://www.googleapis.com/auth/drive.file",
-        "https://www.googleapis.com/auth/drive.readonly"
+        # "https://www.googleapis.com/auth/drive.readonly"
     ],
     offline=True,
     reprompt_consent=True,
@@ -293,35 +294,62 @@ def users_list():
 
     return render_template("users_list.html", objects=res)
 
+# Redisの設定を環境変数から取得（Celeryと同じ設定を使用）
+redis_url = os.environ.get("CELERY_BROKER_URL")
+
+# キャッシュの設定
+cache = Cache(app, config={
+    'CACHE_TYPE': 'RedisCache',
+    'CACHE_REDIS_URL': redis_url
+})
 
 # ファイルリスト
 @app.route("/movies", methods=["GET"])
 @login_required
+@cache.memoize(timeout=300)  # 5分間キャッシュ
 def movies():
     # ユーザー情報取得
     user = get_userdata()
 
-    # ユーザーがアップロードしたファイルのリストを取得
-    drive_response = google.get(
-        "/drive/v3/files",
-        params={
-            "q": "mimeType contains 'video/' or mimeType contains 'audio/'",
-            "fields": "files(id,name,mimeType,thumbnailLink)"
-        }
-    )
-    own_files = drive_response.json().get('files', [])
+    # ページネーションパラメータ
+    page_size = 100  # 一度に取得するファイル数
+    page_token = None
+    all_files = []
 
-    # SummaryDBのデータ取得
+    while True:
+        # Googleドライブフォルダ情報取得
+        drive = google.get(
+            "/drive/v3/files",
+            params={
+                "q": f"(mimeType contains 'video/' or mimeType contains 'audio/') and '{user.folder_id}' in parents and trashed=false",
+                "fields": "nextPageToken, files(id,name,mimeType,thumbnailLink)",
+                "pageSize": page_size,
+                "pageToken": page_token,
+            }
+        )
+        drive_data = drive.json()
+        
+        all_files.extend(drive_data.get("files", []))
+        
+        page_token = drive_data.get("nextPageToken")
+        if not page_token:
+            break
+
+    # SummaryDBのデータ取得（バッチで取得）
+    file_ids = [f["id"] for f in all_files]
     db_data = db.session.query(
         Summary.id, Summary.status, Summary.created_at, Summary.date
-    ).filter(Summary.userid == user.id).all()
+    ).filter(Summary.id.in_(file_ids)).all()
+
+    # DBデータをディクショナリに変換して高速なルックアップを可能にする
+    db_data_dict = {record.id: record for record in db_data}
 
     # 返却用リスト
     result_list = []
 
-    for f in own_files:
+    for f in all_files:
         # ステータス情報取得
-        record = next((r for r in db_data if f["id"] == r.id), None)
+        record = db_data_dict.get(f["id"])
 
         if record:
             # DBにレコードが存在した場合のみ追加

@@ -55,9 +55,17 @@ app.config["OPENAI_KEY"] = os.environ.get("OPENAI_KEY")
 app.config["CLIENT_ID"] = os.environ.get("CLIENT_ID")
 app.config["CLIENT_SECRET"] = os.environ.get("CLIENT_SECRET")
 app.config["SLACK_WEBHOOK_URI"] = os.environ.get("SLACK_WEBHOOK_URI")
+app.config["REDIRECT_URL"] = os.environ.get("REDIRECT_URL")
+app.config["CELERY_BROKER_URL"] = os.environ.get("CELERY_BROKER_URL")
+app.config["CELERY_RESULT_BACKEND"] = os.environ.get("CELERY_BROKER_BACKEND")
 
 # slack（デバッグ用）
 slack = slackweb.Slack(url=app.config["SLACK_WEBHOOK_URI"])
+
+
+def debug(message):
+    slack.notify(text=message)
+
 
 # SQLAlchemy初期化
 db = SQLAlchemy(app)
@@ -66,7 +74,7 @@ db = SQLAlchemy(app)
 blueprint = make_google_blueprint(
     client_id=app.config["CLIENT_ID"],
     client_secret=app.config["CLIENT_SECRET"],
-    redirect_url="https://mc.omoshirotalk.com/google/authorized",
+    redirect_url=app.config["REDIRECT_URL"],
     scope=[
         "openid",
         "https://www.googleapis.com/auth/userinfo.email",
@@ -125,14 +133,7 @@ def page_not_found(error):
     return render_template("404.html"), 404
 
 
-def debug(message):
-    slack.notify(text=message)
-
-
 app.register_error_handler(404, page_not_found)
-
-app.config["CELERY_BROKER_URL"] = os.environ.get("CELERY_BROKER_URL")
-app.config["CELERY_RESULT_BACKEND"] = os.environ.get("CELERY_BROKER_BACKEND")
 
 celery = Celery(app.name, broker=app.config["CELERY_BROKER_URL"])
 celery.conf.update(app.config)

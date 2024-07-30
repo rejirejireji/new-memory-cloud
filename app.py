@@ -723,6 +723,7 @@ def drivetosvr(id, token):
             # ステータス書き込み「アップロード完了」
             set_status(id, "uploaded", 0)
             main_process(filepath, id)
+            os.remove(filepath)
 
         except Exception as e:
             # エラー情報をログに記録
@@ -846,7 +847,7 @@ def main_process(filepath, id):
             text_withtime += timecode(transcript.segments, 0)["text"]
 
             set_status(id, "Summarize", 80)
-            # os.remove(output_file)
+            os.remove(output_file)
 
         # 尺が指定時間超え
         else:
@@ -889,7 +890,7 @@ def main_process(filepath, id):
                 # 分割によるタイムコードズレ補正
                 offset += tc["end"]
 
-                # os.remove(output_file)
+                os.remove(output_file)
 
         start = 0
         max_len = 5000

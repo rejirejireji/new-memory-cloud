@@ -332,10 +332,8 @@ def movies():
             },
         )
         drive_data = drive.json()
-        print(drive_data)
 
         all_files.extend(drive_data.get("files", []))
-
         page_token = drive_data.get("nextPageToken")
         if not page_token:
             break
@@ -403,50 +401,6 @@ def shared():
     return render_template("shared.html", objects=res)
 
 
-# 共有関数
-def share_file_with_user(file_id, guestemail):
-    # 重複チェック
-    existing_share = Share.query.filter_by(
-        video_id=file_id, guest_email=guestemail
-    ).first()
-
-    # 重複あり
-    if existing_share:
-        return {
-            "status": "duplicate",
-            "message": "このアドレスは既に共有されています",
-            "email": guestemail,
-        }
-
-    try:
-        permission_body = {"type": "user", "role": "reader", "emailAddress": guestemail}
-        res = google.post(
-            f"/drive/v3/files/{file_id}/permissions", json=permission_body
-        )
-
-        # レスポンス正常
-        if res.status_code == 200:
-            response_data = res.json()
-
-            return {"status": "success", "data": response_data, "email": guestemail}
-
-        # レスポンス異常
-        else:
-            return {
-                "status": "error",
-                "message": f"共有失敗: {res.text}",
-                "email": guestemail,
-            }
-
-    # その他エラー
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"エラー: {e}",
-            "email": guestemail,
-        }
-
-
 # 再生画面（共有データ）
 @app.route("/shared/<shared_id>", methods=["GET"])
 @login_required
@@ -512,10 +466,10 @@ def video(file_id):
     else:
         return render_template("loginform.html")
 
-    # POSTリクエストの処理
+    # POSTリクエスト（共有設定）
     if request.method == "POST":
         data = request.get_json()
-        emails_json = data.get("email")  # TagifyからのJSON形式のメールアドレス
+        emails_json = data.get("email")  # TagifyからJSON形式のメールアドレス
         if emails_json:
             emails = json.loads(emails_json)
 
@@ -531,20 +485,15 @@ def video(file_id):
 
             results = []
             for email in emails:
-                result = share_file_with_user(file_id, email["value"])
-                results.append(result)
-
-                if result["status"] == "success":
-                    # DBに共有情報格納（各メールアドレスに対して）
-                    share = Share(
-                        shared_id=str(uuid.uuid4()),
-                        video_id=file_id,
-                        guest_email=email["value"],
-                        permission_id=result["data"]["id"],
-                        owner_id=user.id,
-                        gcs_file_path=f"shared_files/{file_id}",
-                    )
-                    db.session.add(share)
+                # DBに共有情報格納（各メールアドレスに対して）
+                share = Share(
+                    shared_id=str(uuid.uuid4()),
+                    video_id=file_id,
+                    guest_email=email["value"],
+                    owner_id=user.id,
+                    gcs_file_path=f"shared_files/{file_id}",
+                )
+                db.session.add(share)
 
             db.session.commit()
             return jsonify(results)

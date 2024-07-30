@@ -34,10 +34,10 @@
 									<img src="{{ url_for('static', filename='loading.png') }}" height="50px">
 									{% endif %}
 								</td>
-								<td><a href="./shared/{{ object.shared_id }}">{{ object.name }}</a></td>
-								<td>{{ object.created }}</td>
+								<td><a href="./shared/{{ object.shared_id }}">{{ object.title }}</a></td>
+								<td>{{ object.created_at }}</td>
 								<td>{{ object.date }}</td>
-								<td>{{ object.owner }}</td>
+								<td>{{ object.name }}</td>
 							</tr>
 							{% endfor %}
 						</tbody>

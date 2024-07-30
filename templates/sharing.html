@@ -61,21 +61,58 @@
 					// レスポンス異常
 					if (!response.ok) {
 						loadingElement.style.display = 'none';
-						throw new Error('Network Error:' + response.statusText);
+						showToast(`${response.status}:${response.statusText}`, 'error');
 					}
 					// レスポンス正常
 					return response.json();
 				})
 				// レスポンスデータ取得
 				.then(data => {
-					console.log('Success:', data);
+					loadingElement.style.display = 'none';
+					showToast(`${data}`, 'success');
 					location.reload(); // レスポンスが正常ならリロード
 				})
 				// エラーハンドリング
 				.catch((error) => {
 					loadingElement.style.display = 'none';
-					console.error('Error:', error);
+					showToast(`${error}`, 'error');
 				});
+		}
+
+		// トースト表示する関数
+		function showToast(text, type) {
+			// 新しいトースト要素の作成
+			const newToast = document.createElement("div");
+			newToast.classList.add("toast", "align-items-center", "border-0");
+			newToast.role = "alert";
+			newToast.ariaLive = "assertive";
+			newToast.ariaAtomic = "true";
+
+			// トーストの背景色を設定
+			newToast.classList.add(type === 'success' ? 'text-bg-primary' :
+				type === 'error' ? 'text-bg-danger' :
+					'text-bg-warning');
+
+			// トーストの内容を設定
+			newToast.innerHTML = `
+					<div class="d-flex">
+							<div class="toast-body">${text}</div>
+							<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+					</div>
+			`;
+
+			// トーストコンテナにトーストを追加
+			const toastContainer = document.querySelector('.toast-container');
+			toastContainer.appendChild(newToast);
+
+			// トーストを表示
+			const toastInstance = new bootstrap.Toast(newToast);
+			toastInstance.show();
+
+			// トーストが閉じたらDOMから削除
+			newToast.addEventListener('hidden.bs.toast', function () {
+				newToast.remove();
+			});
 		}
 	});
 </script>
@@ -108,15 +145,25 @@
 									<img src="{{ url_for('static', filename='loading.png') }}" height="50px">
 									{% endif %}
 								</td>
-								<td><a href="./video/{{ object.id }}">{{ object.name }}</a></td>
+								<td><a href="./video/{{ object.video_id }}">{{ object.title }}</a></td>
 								<td>{{ object.guest_email }}</td>
-								<td><button data-objectid="{{ object.id }}" data-guest="{{ object.guest_email }}" class="delete-action btn btn-outline-danger btn-sm" type="submit">共有解除</button></td>
+								<td><button data-objectid="{{ object.video_id }}" data-guest="{{ object.guest_email }}" class="delete-action btn btn-outline-danger btn-sm" type="submit">共有解除</button></td>
 							</tr>
 							{% endfor %}
 						</tbody>
 					</table>
 				</div>
 			</div>
+		</div>
+	</div>
+</div>
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+	<div id="Toast" class="toast align-items-center border-0" role="alert" aria-live="assertive" aria-atomic="true">
+		<div class="d-flex">
+			<div class="toast-body" id="Toastcontent">
+			</div>
+			<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
 		</div>
 	</div>
 </div>

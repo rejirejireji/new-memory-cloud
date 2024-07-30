@@ -20,6 +20,8 @@ from sqlalchemy import func, text
 from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.exc import SQLAlchemyError
 from celery import Celery
+from google.cloud import storage
+from google.cloud.exceptions import NotFound
 import requests
 import uuid
 import markdown as md
@@ -33,6 +35,7 @@ import time
 import openai
 import ffmpeg
 import slackweb
+import logging
 from pprint import pprint
 from functools import wraps
 from dotenv import load_dotenv
@@ -126,6 +129,7 @@ class Share(db.Model):
     guest_email = db.Column(db.String(255))
     permission_id = db.Column(db.String(255))
     owner_id = db.Column(db.String(255))
+    gcs_file_path = db.Column(db.String(255))
 
 
 # 404ページ
@@ -295,19 +299,18 @@ def users_list():
 
     return render_template("users_list.html", objects=res)
 
+
 # Redisの設定を環境変数から取得（Celeryと同じ設定を使用）
 redis_url = os.environ.get("CELERY_BROKER_URL")
 
 # キャッシュの設定
-cache = Cache(app, config={
-    'CACHE_TYPE': 'RedisCache',
-    'CACHE_REDIS_URL': redis_url
-})
+cache = Cache(app, config={"CACHE_TYPE": "RedisCache", "CACHE_REDIS_URL": redis_url})
+
 
 # ファイルリスト
 @app.route("/movies", methods=["GET"])
 @login_required
-@cache.memoize(timeout=300)  # 5分間キャッシュ
+@cache.memoize(timeout=100)  # 5分間キャッシュ
 def movies():
     # ユーザー情報取得
     user = get_userdata()
@@ -326,21 +329,24 @@ def movies():
                 "fields": "nextPageToken, files(id,name,mimeType,thumbnailLink)",
                 "pageSize": page_size,
                 "pageToken": page_token,
-            }
+            },
         )
         drive_data = drive.json()
-        
+        print(drive_data)
+
         all_files.extend(drive_data.get("files", []))
-        
+
         page_token = drive_data.get("nextPageToken")
         if not page_token:
             break
 
     # SummaryDBのデータ取得（バッチで取得）
     file_ids = [f["id"] for f in all_files]
-    db_data = db.session.query(
-        Summary.id, Summary.status, Summary.created_at, Summary.date
-    ).filter(Summary.id.in_(file_ids)).all()
+    db_data = (
+        db.session.query(Summary.id, Summary.status, Summary.created_at, Summary.date)
+        .filter(Summary.id.in_(file_ids))
+        .all()
+    )
 
     # DBデータをディクショナリに変換して高速なルックアップを可能にする
     db_data_dict = {record.id: record for record in db_data}
@@ -366,46 +372,17 @@ def movies():
 @app.route("/sharing", methods=["GET"])
 @login_required
 def sharing():
-    # 取得済みトークン横流し => Googleクライアント初期化
-    creds = Credentials(google.token["access_token"])
-    service = build("drive", "v3", credentials=creds)
-
     # ユーザー情報取得
     user = get_userdata()
 
     # 共有リストDB確認
-    sharinglist = db.session.query(Share).filter(Share.owner_id == user.id)
+    res = (
+        db.session.query(Share.guest_email, Share.video_id, Summary.title)
+        .join(Summary, Share.video_id == Summary.id)
+        .filter(Share.owner_id == user.id)
+    )
 
-    # 共有動画のIDとguest_emailをマッピングする辞書を作成
-    video_email_mapping = {video.video_id: video.guest_email for video in sharinglist}
-
-    # バッチリクエスト作成
-    batch = service.new_batch_http_request()
-
-    videos = []
-
-    def callback(request_id, response, exception):
-        if exception is None:
-            # レスポンスにguest_emailを追加
-            response_data = response.copy()
-            guest_email = video_email_mapping.get(response["id"])
-            if guest_email:
-                response_data["guest_email"] = guest_email
-            videos.append(response_data)
-
-    # ID毎にバッチリクエスト設定
-    for video in sharinglist:
-        batch.add(
-            service.files().get(
-                fileId=video.video_id, fields="id, name, thumbnailLink"
-            ),
-            callback=callback,
-        )
-
-    # バッチリクエスト実行
-    batch.execute()
-
-    return render_template("sharing.html", objects=videos)
+    return render_template("sharing.html", objects=res)
 
 
 # 共有（され）リスト
@@ -413,56 +390,17 @@ def sharing():
 @login_required
 def shared():
     user = get_userdata()
-    sharedlist = db.session.query(Share).filter(Share.guest_email == user.email)
-    videos = []
 
-    for share in sharedlist:
-        try:
-            # ファイルのメタデータを取得
-            metadata_response = google.get(
-                f"/drive/v3/files/{share.video_id}",
-                params={"fields": "id,name,mimeType,thumbnailLink,shared,permissions"}
-            )
-            
-            if metadata_response.status_code != 200:
-                print(f"Failed to get metadata for file {share.video_id}: {metadata_response.status_code}")
-                print(f"Response content: {metadata_response.text}")
-                continue
+    res = (
+        db.session.query(
+            Share.shared_id, Summary.created_at, Summary.date, User.name, Summary.title
+        )
+        .join(Summary, Share.video_id == Summary.id)
+        .join(User, Share.owner_id == User.id)
+        .filter(Share.guest_email == user.email)
+    )
 
-            metadata = metadata_response.json()
-            
-            # ファイルが共有されていることを確認
-            if not metadata.get('shared'):
-                print(f"File {share.video_id} is not shared")
-                continue
-
-            # ユーザーの権限を確認
-            user_has_permission = any(
-                perm['emailAddress'] == user.email for perm in metadata.get('permissions', [])
-                if 'emailAddress' in perm
-            )
-            if not user_has_permission:
-                print(f"User does not have permission for file {share.video_id}")
-                continue
-
-            # Summaryテーブルからデータ取得
-            summary_data = db.session.query(Summary).filter(Summary.id == share.video_id).first()
-            
-            if summary_data:
-                metadata["owner"] = db.session.query(User.name).filter(User.id == summary_data.userid).scalar()
-                metadata["shared_id"] = share.shared_id
-                metadata["created"] = summary_data.created_at
-                metadata["date"] = summary_data.date
-                videos.append(metadata)
-            else:
-                print(f"No summary data found for file {share.video_id}")
-            
-        except Exception as e:
-            print(f"Error processing shared file {share.video_id}: {str(e)}")
-            continue
-
-    print(f"Total shared videos found: {len(videos)}")
-    return render_template("shared.html", objects=videos)
+    return render_template("shared.html", objects=res)
 
 
 # 共有関数
@@ -581,6 +519,16 @@ def video(file_id):
         if emails_json:
             emails = json.loads(emails_json)
 
+            gcs_client = storage.Client()
+            bucket = gcs_client.bucket("mc_shared")
+            blob = bucket.blob(f"shared_files/{file_id}")
+
+            # Google Driveからファイルをダウンロード
+            file_content = google.get(f"/drive/v3/files/{file_id}?alt=media").content
+
+            # GCSにアップロード
+            blob.upload_from_string(file_content)
+
             results = []
             for email in emails:
                 result = share_file_with_user(file_id, email["value"])
@@ -594,6 +542,7 @@ def video(file_id):
                         guest_email=email["value"],
                         permission_id=result["data"]["id"],
                         owner_id=user.id,
+                        gcs_file_path=f"shared_files/{file_id}",
                     )
                     db.session.add(share)
 
@@ -662,6 +611,83 @@ def stream(file_id):
     return video
 
 
+# ストリーム（共有）
+@app.route("/stream/share/<file_id>")
+@login_required
+def stream_shared(file_id):
+    user = get_userdata()
+    if not user:
+        return redirect(url_for("google.login"))
+
+    # 共有情報を取得
+    share = Share.query.filter_by(video_id=file_id, guest_email=user.email).first()
+    if not share:
+        abort(404)
+
+    range_header = request.headers.get("Range", None)
+    byte1, byte2 = 0, None
+
+    # 範囲リクエストの解析
+    if range_header:
+        match = re.search("bytes=(\d+)-(\d*)", range_header)
+        groups = match.groups()
+
+        if groups[0]:
+            byte1 = int(groups[0])
+        if groups[1]:
+            byte2 = int(groups[1])
+
+    # GCSクライアントの初期化
+    gcs_client = storage.Client()
+    bucket = gcs_client.bucket("mc_shared")
+    blob = bucket.blob(share.gcs_file_path)
+
+    # ファイルの全体サイズを取得
+    file_size = blob.size
+
+    # file_sizeがNoneの場合、blobのメタデータを明示的に取得
+    if file_size is None:
+        blob.reload()
+        file_size = blob.size
+
+    # file_sizeがまだNoneの場合、エラーを発生させる
+    if file_size is None:
+        abort(500, description="Failed to get file size from GCS")
+
+    # レンジの終了バイトを設定
+    if byte2 is None or byte2 >= file_size:
+        byte2 = file_size - 1
+
+    # コンテンツの長さ
+    content_length = byte2 - byte1 + 1
+
+    # GCSからデータをストリーミング
+    def generate():
+        with blob.open("rb") as f:
+            f.seek(byte1)
+            remaining = content_length
+            chunk_size = 8192
+
+            while remaining > 0:
+                chunk = f.read(min(chunk_size, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    # レスポンスヘッダーの設定
+    headers = {
+        "Content-Range": f"bytes {byte1}-{byte2}/{file_size}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(content_length),
+        "Content-Type": "video/mp4",
+    }
+
+    status = 206 if range_header else 200
+
+    return Response(stream_with_context(generate()), status=status, headers=headers)
+
+
 # ホーム
 @app.route("/home", methods=["GET"])
 @login_required
@@ -688,7 +714,9 @@ def drivetosvr(id, token):
             # Googleドライブ ⇒ サーバに保存
             filepath = os.path.join(app.root_path, app.config["UPLOAD_FOLDER"], id)
             with open(filepath, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=32768):  # chunk_sizeは適宜調整
+                for chunk in resp.iter_content(
+                    chunk_size=32768
+                ):  # chunk_sizeは適宜調整
                     if chunk:  # チャンクが空でないことを確認
                         f.write(chunk)
 
@@ -1129,36 +1157,77 @@ def deleteshare():
     # ユーザー情報取得
     user = get_userdata()
 
-    if not file_id:
+    if not user:
         return (
-            jsonify({"status": "error", "message": "ファイル情報がありません"}),
+            jsonify({"status": "error", "message": "ユーザー認証に失敗しました"}),
+            401,
+        )
+
+    if not file_id or not guest:
+        return (
+            jsonify({"status": "error", "message": "必要な情報が不足しています"}),
             400,
         )
 
     try:
-        # DBから該当するレコードを削除
+        # DBから該当するレコードを取得
         share_record = Share.query.filter_by(
             video_id=file_id, owner_id=user.id, guest_email=guest
         ).first()
 
-        if share_record:
-            # GoogleドライブAPIを使って共有を解除
-            response = google.delete(
-                f"/drive/v3/files/{file_id}/permissions/{share_record.permission_id}"
+        if not share_record:
+            return (
+                jsonify({"status": "error", "message": "共有レコードが見つかりません"}),
+                404,
             )
 
-            if response.status_code == 204:
-                db.session.delete(share_record)
-                db.session.commit()
-                return {"status": "success", "message": "共有解除完了"}
-            else:
-                return {
-                    "status": "error",
-                    "message": f"共有解除エラー: {response.text}",
-                }
+        # GCSからファイルを削除
+        try:
+            gcs_client = storage.Client()
+            bucket = gcs_client.bucket("mc_shared")
+            blob = bucket.blob(share_record.gcs_file_path)
+            blob.delete()
+        except NotFound:
+            logging.warning(
+                f"GCSファイルが見つかりません: {share_record.gcs_file_path}"
+            )
+        except Exception as gcs_error:
+            logging.error(f"GCSファイル削除エラー: {str(gcs_error)}")
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "ファイル削除中にエラーが発生しました",
+                    }
+                ),
+                500,
+            )
+
+        # DBからレコードを削除
+        try:
+            db.session.delete(share_record)
+            db.session.commit()
+        except Exception as db_error:
+            db.session.rollback()
+            logging.error(f"DB削除エラー: {str(db_error)}")
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "データベース操作中にエラーが発生しました",
+                    }
+                ),
+                500,
+            )
+
+        return jsonify({"status": "success", "message": "共有解除完了"})
 
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logging.error(f"予期せぬエラー: {str(e)}")
+        return (
+            jsonify({"status": "error", "message": "予期せぬエラーが発生しました"}),
+            500,
+        )
 
 
 # ajax：ステータス取得
@@ -1228,7 +1297,7 @@ def editcomment():
                 # 変更をデータベースにコミット
                 db.session.commit()
                 print(f"Status update succeeded: [id]{id}, [comment]{comment}")
-                return redirect(url_for('video', file_id=id))
+                return redirect(url_for("video", file_id=id))
             else:
                 print("No record")
                 return {"error": "no record."}, 400
@@ -1238,6 +1307,7 @@ def editcomment():
             return {"error": "DB Error."}, 400
 
     return {"error": "error on ID or date"}, 400
+
 
 # ajax：議事録変更
 @app.route("/ajax/editsummary", methods=["POST"])
@@ -1267,6 +1337,7 @@ def editsummary():
             return {"error": "DB Error."}, 400
 
     return {"error": "error on ID or summary"}, 400
+
 
 # ajax：ユーザー情報取得
 @app.route("/ajax/user")

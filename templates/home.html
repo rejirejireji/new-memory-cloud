@@ -35,7 +35,7 @@
 	});
 
 	function upload_file(file) {
-		const MAX_SIZE_MB = 400;
+		const MAX_SIZE_MB = 800;
 		const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
 
 		// ファイルサイズチェック
@@ -105,7 +105,7 @@
 		<div class="col-12 col-sm-12 col-md-12 col-xl-6 col-xxl-6 d-flex">
 			<div class="card flex-fill w-100">
 				<div id="v_header" class="card-header mb-3 mt-4 center">
-					<h5 class="card-title mb-0">動画ファイルをアップロードしてください。（400MBまで）</h5>
+					<h5 class="card-title mb-0">動画ファイルをアップロードしてください。（上限800MBまで。400MB以内推奨）</h5>
 				</div>
 				<div class="card-body center mb-3 d-flex flex-row">
 					<form method="post" enctype="multipart/form-data" action="">

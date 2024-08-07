@@ -27,6 +27,7 @@ import uuid
 import markdown as md
 import pymysql
 import math
+import datetime
 import re
 import os
 import json
@@ -36,6 +37,7 @@ import openai
 import ffmpeg
 import slackweb
 import logging
+import tempfile
 from pprint import pprint
 from functools import wraps
 from dotenv import load_dotenv
@@ -44,6 +46,9 @@ from flask_caching import Cache
 load_dotenv("/var/www/html/app/.env")
 pymysql.install_as_MySQLdb()
 app = Flask(__name__)
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 app.secret_key = "your_secret_key"
 app.config["MAX_CONTENT_LENGTH"] = 2000 * 1000 * 1000
@@ -127,7 +132,6 @@ class Share(db.Model):
     shared_id = db.Column(db.String(255), primary_key=True)
     video_id = db.Column(db.String(255))
     guest_email = db.Column(db.String(255))
-    permission_id = db.Column(db.String(255))
     owner_id = db.Column(db.String(255))
     gcs_file_path = db.Column(db.String(255))
 
@@ -391,14 +395,38 @@ def shared():
 
     res = (
         db.session.query(
-            Share.shared_id, Summary.created_at, Summary.date, User.name, Summary.title
+            Share.shared_id, Summary.created_at, Summary.date, User.name, Summary.title, Share.video_id
         )
         .join(Summary, Share.video_id == Summary.id)
         .join(User, Share.owner_id == User.id)
         .filter(Share.guest_email == user.email)
     )
 
-    return render_template("shared.html", objects=res)
+    gcs_client = storage.Client()
+    bucket = gcs_client.bucket("mc_shared")
+
+    shared_data = []
+
+    for share in res:
+        thumbnail_blob = bucket.blob(f'thumbnails/{share.video_id}')
+        thumbnail_url = thumbnail_blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(hours=1),
+            method="GET"
+        )
+        thumbnail_url_escaped = Markup(json.dumps(thumbnail_url))
+        print(thumbnail_url)
+
+        shared_data.append({
+            "created_at": share.created_at,
+            "date": share.date,
+            "name": share.name,
+            "title": share.title,
+            "thumbnailLink": thumbnail_url_escaped,
+            "shared_id": share.shared_id
+        })
+
+    return render_template("shared.html", objects=shared_data)
 
 
 # 再生画面（共有データ）
@@ -468,37 +496,75 @@ def video(file_id):
 
     # POSTリクエスト（共有設定）
     if request.method == "POST":
+        logger.debug("Received POST request to /share")
         data = request.get_json()
-        emails_json = data.get("email")  # TagifyからJSON形式のメールアドレス
-        if emails_json:
+        logger.debug(f"Received data: {data}")
+        emails_json = data.get("email")
+
+        if not emails_json:
+            return jsonify({"status": "error", "message": "Invalid request data"}), 400
+        try:
             emails = json.loads(emails_json)
 
             gcs_client = storage.Client()
             bucket = gcs_client.bucket("mc_shared")
             blob = bucket.blob(f"shared_files/{file_id}")
 
-            # Google Driveからファイルをダウンロード
-            file_content = google.get(f"/drive/v3/files/{file_id}?alt=media").content
+            # Google Driveからファイル情報を取得
+            file_info = google.get(
+                f"/drive/v3/files/{file_id}?fields=id,name,thumbnailLink"
+            ).json()
+            thumbnail_url = file_info.get("thumbnailLink")
 
-            # GCSにアップロード
-            blob.upload_from_string(file_content)
+            new_shares = []
+            existing_shares = []
 
-            results = []
             for email in emails:
-                # DBに共有情報格納（各メールアドレスに対して）
-                share = Share(
-                    shared_id=str(uuid.uuid4()),
-                    video_id=file_id,
-                    guest_email=email["value"],
-                    owner_id=user.id,
-                    gcs_file_path=f"shared_files/{file_id}",
-                )
-                db.session.add(share)
+                # 既存の共有をチェック
+                existing_share = Share.query.filter_by(
+                    video_id=file_id, guest_email=email["value"], owner_id=user.id
+                ).first()
 
-            db.session.commit()
-            return jsonify(results)
-        else:
-            return jsonify({"status": "error", "message": "不正なメールアドレス"})
+                if existing_share:
+                    existing_shares.append(email["value"])
+                else:
+                    new_shares.append(email["value"])
+
+            if new_shares:
+                # 新しい共有がある場合　GCS存在チェックと圧縮処理
+                if not blob.exists():
+                    # Gドライブからダウンロード
+                    file_content = google.get(
+                        f"/drive/v3/files/{file_id}?alt=media"
+                    ).content
+                    logger.debug("GdriveOK")
+
+                    # GCS格納（非同期）
+                    task = compress_and_upload_to_gcs.delay(
+                        file_content, file_id, "mc_shared", thumbnail_url
+                    )
+                    logger.debug(f"Task ID: {task.id}")
+
+                # 新しい共有情報をDBに保存
+                for email in new_shares:
+                    share = Share(
+                        shared_id=str(uuid.uuid4()),
+                        video_id=file_id,
+                        guest_email=email,
+                        owner_id=user.id,
+                        gcs_file_path=f"shared_files/{file_id}",
+                    )
+                    db.session.add(share)
+
+                db.session.commit()
+
+                return jsonify({"status": "success", "message": "共有完了"})
+            else:
+                return jsonify({"status": "warning", "message": "既に共有されています"})
+
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({"status": "error", "message": str(e)})
 
     res.transcript = Markup(res.transcript.replace("\n", "<br>"))
     res.summary = Markup(md.markdown(res.summary))
@@ -511,6 +577,75 @@ def video(file_id):
     res.comment = Markup(res.comment.replace("\n", "<br>"))
 
     return render_template("video.html", data=res)
+
+
+@celery.task(bind=True)
+def compress_and_upload_to_gcs(self, file_content, file_id, bucket_name, thumbnail_url):
+    gcs_client = storage.Client()
+    bucket = gcs_client.bucket(bucket_name)
+    blob = bucket.blob(f"shared_files/{file_id}")
+
+    temp_file_path = None
+    compressed_file_path = None
+
+    try:
+        # 一時ファイル作成
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+            temp_file.write(file_content)
+            temp_file_path = temp_file.name
+
+        # 圧縮済み一時ファイルのパス
+        compressed_file_path = f"{temp_file_path}_compressed.mp4"
+
+        # 動画圧縮（ffmpeg）
+        stream = ffmpeg.input(temp_file_path)
+        stream = ffmpeg.filter(stream, "scale", width=1280, height=-1)
+        stream = ffmpeg.output(
+            stream,
+            compressed_file_path,
+            vcodec="libx264",
+            acodec="aac",
+            audio_bitrate="128k",
+            preset="medium",
+            crf=23,
+        )
+        ffmpeg.run(stream, overwrite_output=True, quiet=False)
+
+        # 圧縮済みファイルをGCSに格納
+        blob.upload_from_filename(compressed_file_path)
+        logger.info(f"File {file_id} compressed and uploaded successfully.")
+
+        # サムネイルの保存
+        if thumbnail_url:
+            thumbnail_blob = bucket.blob(f"thumbnails/{file_id}")
+            thumbnail_content = requests.get(thumbnail_url).content
+            thumbnail_blob.upload_from_string(
+                thumbnail_content, content_type="image/jpeg"
+            )
+
+        return {
+            "status": "success",
+            "message": "File compressed and uploaded successfully.",
+        }
+
+    except ffmpeg.Error as e:
+        logger.error(f"FFmpeg compression failed for {file_id}: {e.stderr.decode()}")
+        blob.upload_from_string(file_content)
+        return {
+            "status": "warning",
+            "message": "Compression failed, original file uploaded.",
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing file {file_id}: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+    finally:
+        # 一時ファイル削除
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        if compressed_file_path and os.path.exists(compressed_file_path):
+            os.remove(compressed_file_path)
 
 
 # ストリーム
@@ -1104,7 +1239,6 @@ def deleteshare():
     file_id = data.get("id")
     guest = data.get("guest")
 
-    # ユーザー情報取得
     user = get_userdata()
 
     if not user:
@@ -1131,48 +1265,33 @@ def deleteshare():
                 404,
             )
 
-        # GCSからファイルを削除
-        try:
-            gcs_client = storage.Client()
-            bucket = gcs_client.bucket("mc_shared")
-            blob = bucket.blob(share_record.gcs_file_path)
-            blob.delete()
-        except NotFound:
-            logging.warning(
-                f"GCSファイルが見つかりません: {share_record.gcs_file_path}"
-            )
-        except Exception as gcs_error:
-            logging.error(f"GCSファイル削除エラー: {str(gcs_error)}")
-            return (
-                jsonify(
-                    {
-                        "status": "error",
-                        "message": "ファイル削除中にエラーが発生しました",
-                    }
-                ),
-                500,
-            )
-
         # DBからレコードを削除
-        try:
-            db.session.delete(share_record)
-            db.session.commit()
-        except Exception as db_error:
-            db.session.rollback()
-            logging.error(f"DB削除エラー: {str(db_error)}")
-            return (
-                jsonify(
-                    {
-                        "status": "error",
-                        "message": "データベース操作中にエラーが発生しました",
-                    }
-                ),
-                500,
-            )
+        db.session.delete(share_record)
+        db.session.commit()
+
+        # 同じvideo_idを持つ他の共有レコードがあるか確認
+        remaining_shares = Share.query.filter_by(video_id=file_id).count()
+
+        if remaining_shares == 0:
+            # 共有レコードが他に存在しない場合　GCSからファイル削除
+            try:
+                gcs_client = storage.Client()
+                bucket = gcs_client.bucket("mc_shared")
+                blob = bucket.blob(share_record.gcs_file_path)
+                blob.delete()
+                logging.info(f"GCSファイルを削除しました: {share_record.gcs_file_path}")
+            except NotFound:
+                logging.warning(
+                    f"GCSファイルが見つかりません: {share_record.gcs_file_path}"
+                )
+            except Exception as gcs_error:
+                logging.error(f"GCSファイル削除エラー: {str(gcs_error)}")
+                # GCSファイルの削除に失敗しても、共有自体は解除されているのでエラーは返さない
 
         return jsonify({"status": "success", "message": "共有解除完了"})
 
     except Exception as e:
+        db.session.rollback()
         logging.error(f"予期せぬエラー: {str(e)}")
         return (
             jsonify({"status": "error", "message": "予期せぬエラーが発生しました"}),

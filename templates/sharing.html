@@ -69,7 +69,7 @@
 				// レスポンスデータ取得
 				.then(data => {
 					loadingElement.style.display = 'none';
-					showToast(`${data}`, 'success');
+					showToast(`${data.message}`, 'success');
 					location.reload(); // レスポンスが正常ならリロード
 				})
 				// エラーハンドリング

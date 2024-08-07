@@ -98,17 +98,17 @@
 					confirmButton.disabled = false;
 					// ローディングアニメーション停止
 					loadingElement.style.display = 'none';
-
+					console.log(data);
 					// 共有結果の処理
-					data.forEach(result => {
-						if (result.status === 'success') {
-							showToast(`動画を ${result.email} に共有しました`, 'success');
-						} else if (result.status === 'duplicate') {
-							showToast(`${result.email} は既に共有されています`, 'warning');
-						} else {
-							showToast(`${result.email} への共有に失敗しました: ${result.message}`, 'error');
-						}
-					});
+					if (data.status === 'success') {
+						showToast(`動画を共有しました`, 'success');
+					}
+					else if (data.status === 'warning'){
+						showToast(`${data.message}`,'warning')
+					}
+					else {
+						showToast(`共有に失敗しました: ${data.message}`, 'error');
+					}
 				})
 				.catch((error) => {
 					// エラーハンドリング

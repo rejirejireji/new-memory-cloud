@@ -1,35 +1,62 @@
-		<!-- サイドバー -->
-		<nav id="sidebar" class="sidebar js-sidebar">
-			<div class="sidebar-content js-simplebar">
-				<div class="sidebar-brand">
-					<img id="logo" class="align-middle" src="{{ url_for('static', filename='logo.svg') }}" alt="メモリークラウド">
-				</div>
+<!-- サイドバー -->
+<nav id="sidebar" class="sidebar js-sidebar">
+	<div class="sidebar-content js-simplebar">
+		<div class="sidebar-brand">
+			<img id="logo" class="align-middle" src="{{ url_for('static', filename='logo.svg') }}" alt="メモリークラウド">
+		</div>
 
-				<ul class="sidebar-nav">
-					<!-- <li class="sidebar-header">
+		<ul class="sidebar-nav">
+			<!-- <li class="sidebar-header">
 						管理
 					</li> -->
 
-					<li class="sidebar-item" data-itemname="home">
-						<a class="sidebar-link" href="/home">
-							<i class="align-middle" data-feather="home"></i> <span class="align-middle">Home</span>
-						</a>
-					</li>
-					<li class="sidebar-item" data-itemname="movies">
-						<a class="sidebar-link" href="/movies">
-							<i class="align-middle" data-feather="video"></i> <span class="align-middle">Movies</span>
-						</a>
-					</li>
-					<li class="sidebar-item" data-itemname="sharing">
-						<a class="sidebar-link" href="/sharing">
-							<i class="align-middle" data-feather="share"></i> <span class="align-middle">Sharing</span>
-						</a>
-					</li>
-					<li class="sidebar-item" data-itemname="shared">
-						<a class="sidebar-link" href="/shared">
-							<i class="align-middle" data-feather="share-2"></i> <span class="align-middle">Shared</span>
-						</a>
-					</li>
-				</ul>
-			</div>
-		</nav>
+			<li class="sidebar-item" data-itemname="home">
+				<a class="sidebar-link" href="/home">
+					<i class="align-middle" data-feather="home"></i> <span class="align-middle">ホーム</span>
+				</a>
+			</li>
+			<li class="sidebar-item" data-itemname="movies">
+				<a class="sidebar-link" href="/movies">
+					<i class="align-middle" data-feather="video"></i> <span class="align-middle">議事録</span>
+				</a>
+			</li>
+			<li class="sidebar-item" data-itemname="sharing">
+				<a class="sidebar-link" href="/sharing">
+					<i class="align-middle" data-feather="share"></i> <span class="align-middle">共有中の議事録</span>
+				</a>
+			</li>
+			<li class="sidebar-item" data-itemname="shared">
+				<a class="sidebar-link" href="/shared">
+					<i class="align-middle" data-feather="share-2"></i> <span class="align-middle">共有された議事録</span>
+				</a>
+			</li>
+			<li class="sidebar-item" data-itemname="admin" style="display: none;" id="adminlink">
+				<a class="sidebar-link" href="{{ url_for('admin_dashboard') }}">
+					<i class="align-middle" data-feather="settings"></i> <span class="align-middle">管理者メニュー</span>
+				</a>
+			</li>
+		</ul>
+		<div class="sidebar-bottomlink">
+			<a href="/terms" class="sidebar-link">利用規約</a>
+			<a href="/privacy" class="sidebar-link">プライバシーポリシー</a>
+			<a href="https://form.run/@memorycloud02" class="sidebar-link btn btn-primary mt-2" style="display: none;" id="premium-button">プレミアムプラン申込</a>
+		</div>
+	</div>
+</nav>
+
+<script>
+	function checkPremiumStatus() {
+		fetch('/ajax/check_premium_status')
+			.then(response => response.json())
+			.then(data => {
+				if (data.needs_premium) {
+					document.getElementById('premium-button').style.display = 'block';
+				} else {
+					document.getElementById('premium-button').style.display = 'none';
+				}
+			});
+	}
+
+	// ステータスチェック
+	checkPremiumStatus();
+</script>

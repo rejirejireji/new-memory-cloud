@@ -34,7 +34,7 @@
 		}
 	});
 
-	function upload_file(file) {
+	async function upload_file(file) {
 		const MAX_SIZE_MB = 800;
 		const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
 
@@ -43,29 +43,30 @@
 			alert(`ファイルサイズは${MAX_SIZE_MB}MBを超えてはいけません。`);
 			return;
 		}
-		
-		// アップロード
+
 		const percent = document.querySelector('span#percent');
 		const progress = document.querySelector('progress');
 		const header = document.querySelector('div#v_header');
 		const container = document.querySelector('div#v_container');
 
-		const body = new FormData()
 		const xhr = new XMLHttpRequest()
-		body.append('file', file)
+		const body = new FormData();
+		body.append('file', file);
+
+		// CSRFトークンの追加
+		const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 
 		// 進捗表示
 		progress.style.display = 'block';
 		percent.style.display = 'block';
-
-		// 進捗更新
 		xhr.upload.addEventListener('progress', (evt) => {
 			const p = (evt.loaded / evt.total * 100).toFixed(1);
 			percent.innerText = `${p}%`
 			document.getElementById("prg").value = p
 		});
 
-		xhr.open('post', '/ajax/upload')
+		xhr.open('post', '/ajax/upload');
+		xhr.setRequestHeader('X-CSRFToken', csrfToken);
 
 		// アップロード完了後
 		xhr.onload = () => {
@@ -99,24 +100,358 @@
 </script>
 
 <div class="container-fluid p-0">
-	<h1 class="h3 mb-3">議事録作成</h1>
-	<!-- 1段目 -->
-	<div class="row">
-		<div class="col-12 col-sm-12 col-md-12 col-xl-6 col-xxl-6 d-flex">
-			<div class="card flex-fill w-100">
-				<div id="v_header" class="card-header mb-3 mt-4 center">
+	<h1 class="h3 mb-3">ホーム</h1>
+
+	<!-- アップロードセクション -->
+	<div class="row mb-4">
+		<div class="col-12">
+			<div class="card">
+				<div id="v_header" class="card-header">
 					<h5 class="card-title mb-0">動画ファイルをアップロードしてください。（上限800MBまで。400MB以内推奨）</h5>
 				</div>
-				<div class="card-body center mb-3 d-flex flex-row">
-					<form method="post" enctype="multipart/form-data" action="">
+				<div class="card-body d-flex align-items-center">
+					<form method="post" enctype="multipart/form-data" action="" class="me-3">
+						<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 						<button type="button" class="btn btn-primary" id="upload">ファイル選択</button>
 					</form>
-					<progress id="prg" value="0" max="100"></progress>
-					<span id="percent">0%</span>
+					<div class="flex-grow-1 d-flex align-items-center">
+						<progress id="prg" value="0" max="100" class="flex-grow-1 me-2"></progress>
+						<span id="percent">0%</span>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- ダッシュボード統計 -->
+	<div class="row">
+		<div class="col-xl-1-5 col-lg-4 col-md-4 col-sm-6 mb-4">
+			<div class="card">
+				<div class="card-body">
+					<h5 class="card-title mb-4">総アップロード回数</h5>
+					<h1 class="mt-1 mb-3">{{ upload_count }} 回</h1>
+				</div>
+			</div>
+		</div>
+
+		<div class="col-xl-1-5 col-lg-4 col-md-4 col-sm-6 mb-4">
+			<div class="card">
+				<div class="card-body">
+					<h5 class="card-title mb-4">総アップロード時間</h5>
+					<h1 class="mt-1 mb-3">{{ total_upload_duration }} 分</h1>
+				</div>
+			</div>
+		</div>
+
+		<div class="col-xl-1-5 col-lg-4 col-md-4 col-sm-6 mb-4">
+			<div class="card">
+				<div class="card-body">
+					<h5 class="card-title mb-4">今月のアップロード時間</h5>
+					<h1 class="mt-1 mb-3">{{ monthly_upload_time | int }} 分</h1>
+				</div>
+			</div>
+		</div>
+
+		<div class="col-xl-1-5 col-lg-4 col-md-4 col-sm-6 mb-4">
+			<div class="card">
+				<div class="card-body">
+					<h5 class="card-title mb-4">処理中の動画</h5>
+					<h1 class="mt-1 mb-3">{{ processing_videos }} 件</h1>
+				</div>
+			</div>
+		</div>
+
+		<div class="col-xl-1-5 col-lg-4 col-md-4 col-sm-6 mb-4">
+			<div class="card">
+				<div class="card-body">
+					<h5 class="card-title mb-4">議事録作成済み</h5>
+					<h1 class="mt-1 mb-3">{{ video_statuses.Complete }} 件</h1>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- グラフと最近のアクティビティ -->
+	<div class="row">
+		<div class="col-12 col-lg-6 mb-4">
+			<div class="card">
+				<div class="card-header">
+					<h5 class="card-title mb-0">動画ステータス</h5>
+				</div>
+				<div class="card-body">
+					<div class="chart">
+						<canvas id="videoStatusChart"></canvas>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="col-12 col-lg-6 mb-4">
+			<div class="card">
+				<div class="card-header">
+					<h5 class="card-title mb-0">最近のアクティビティ</h5>
+				</div>
+				<div class="card-body">
+					<ul class="list-unstyled">
+						{% for activity in recent_activity %}
+						<li class="activity-item">
+							<div class="activity-icon">
+								<i class="material-icons" data-status="{{ activity.status }}">
+									{% if activity.status == 'Complete' %}grading
+									{% elif activity.status == 'Unprocessed' %}do_not_disturb_on
+									{% elif activity.status in ['uploading', 'Encode', 'Transcript', 'Timecode', 'Summarize'] %}pending
+									{% elif activity.status == 'uploaded' %}check_circle
+									{% elif activity.status == 'failed' %}error
+									{% else %}help
+									{% endif %}
+								</i>
+							</div>
+							<div class="activity-text">
+								{{ activity.title }} - {{ get_status_description(activity.status) }}
+							</div>
+						</li>
+						{% endfor %}
+					</ul>
 				</div>
 			</div>
 		</div>
 	</div>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+	document.addEventListener('DOMContentLoaded', function () {
+		var ctx = document.getElementById('videoStatusChart').getContext('2d');
+
+		// ステータスとその件数（適切にエスケープ）
+		var statuses = JSON.parse('{{ video_statuses | tojson | safe }}');
+		var statusMapping = JSON.parse('{{ status_mapping | tojson | safe }}');
+		var filteredStatuses = Object.entries(statuses).filter(([_, value]) => value > 0);
+		var labels = filteredStatuses.map(([key, _]) => statusMapping[key]);
+		var data = filteredStatuses.map(([_, value]) => value);
+
+		var backgroundColors = [
+			'rgba(75, 192, 192, 0.6)',
+			'rgba(54, 162, 235, 0.6)',
+			'rgba(255, 206, 86, 0.6)',
+			'rgba(153, 102, 255, 0.6)',
+			'rgba(255, 159, 64, 0.6)',
+			'rgba(255, 99, 132, 0.6)',
+			'rgba(199, 199, 199, 0.6)',
+			'rgba(83, 102, 255, 0.6)',
+			'rgba(255, 99, 132, 0.6)'
+		];
+
+		var videoStatusChart = new Chart(ctx, {
+			type: 'pie',
+			data: {
+				labels: labels,
+				datasets: [{
+					data: data,
+					backgroundColor: backgroundColors.slice(0, labels.length),
+					borderColor: backgroundColors.slice(0, labels.length).map(color => color.replace('0.6', '1')),
+					borderWidth: 1
+				}]
+			},
+			options: {
+				responsive: true,
+				maintainAspectRatio: false,
+				plugins: {
+					legend: {
+						position: 'right',
+					},
+					tooltip: {
+						callbacks: {
+							label: function (context) {
+								var label = context.label || '';
+								var value = context.raw;
+								var total = context.dataset.data.reduce((a, b) => a + b, 0);
+								var percentage = ((value / total) * 100).toFixed(1);
+								return `${label}: ${value} (${percentage}%)`;
+							}
+						}
+					}
+				}
+			}
+		});
+	});
+</script>
+
+<!-- プレミアムアップグレードモーダル -->
+<div class="modal micromodal-slide" id="premium-modal" aria-hidden="true">
+	<div class="modal__overlay" tabindex="-1" data-micromodal-close>
+		<div class="modal__container" role="dialog" aria-modal="true" aria-labelledby="premium-modal-title">
+			<header class="modal__header">
+				<h2 class="modal__title" id="premium-modal-title">
+					プレミアムプランへのアップグレード
+				</h2>
+				<button class="modal__close" aria-label="Close modal" data-micromodal-close></button>
+			</header>
+			<main class="modal__content" id="premium-modal-content">
+				<p>
+					月間アップロード時間が30時間を超えたか、ご利用開始から1ヶ月が経過しました。より多くの機能を使用するには、プレミアムプランへのアップグレードが必要です。
+				</p>
+			</main>
+			<footer class="modal__footer">
+				<button class="modal__btn" data-micromodal-close aria-label="Close this dialog window">閉じる</button>
+				<a href="https://form.run/@memorycloud02" class="modal__btn modal__btn-primary">プレミアムプランに申し込む</a>
+			</footer>
+		</div>
+	</div>
+</div>
+
+<!-- 追加時間購入モーダル -->
+<div class="modal micromodal-slide" id="additional-time-modal" aria-hidden="true">
+	<div class="modal__overlay" tabindex="-1" data-micromodal-close>
+		<div class="modal__container" role="dialog" aria-modal="true" aria-labelledby="additional-time-modal-title">
+			<header class="modal__header">
+				<h2 class="modal__title" id="additional-time-modal-title">
+					追加時間の購入
+				</h2>
+				<button class="modal__close" aria-label="Close modal" data-micromodal-close></button>
+			</header>
+			<main class="modal__content" id="additional-time-modal-content">
+				<p>
+					10時間の追加アップロード時間を購入しますか？ 料金は1,650円（税込）です。
+				</p>
+			</main>
+			<footer class="modal__footer">
+				<button class="modal__btn" data-micromodal-close aria-label="Close this dialog window">キャンセル</button>
+				<button id="confirm-additional-time" class="modal__btn modal__btn-primary">購入する</button>
+			</footer>
+		</div>
+	</div>
+</div>
+
+<script>
+	document.addEventListener('DOMContentLoaded', function () {
+
+		const uploadButton = document.getElementById('upload');
+
+		fetch('/ajax/check_premium_status')
+			.then(response => response.json())
+			.then(data => {
+				if (data.needs_premium) {
+					if (uploadButton) {
+						uploadButton.disabled = true;
+						uploadButton.textContent = 'アップロード制限中';
+						uploadButton.classList.add('btn-secondary');
+						uploadButton.classList.remove('btn-primary');
+					}
+				} else {
+					if (uploadButton) {
+						uploadButton.disabled = false;
+						uploadButton.textContent = 'ファイル選択';
+						uploadButton.classList.add('btn-primary');
+						uploadButton.classList.remove('btn-secondary');
+					}
+				}
+			})
+			.catch(error => {
+				console.error('Error checking premium status:', error);
+			});
+	});
+</script>
+
+<script src="https://unpkg.com/micromodal/dist/micromodal.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/micromodal/dist/micromodal.css">
+<script>
+	document.addEventListener('DOMContentLoaded', function () {
+		MicroModal.init({
+			disableScroll: true,
+			awaitOpenAnimation: true,
+			awaitCloseAnimation: true
+		});
+	});
+</script>
+<!-- <script>
+	document.addEventListener('DOMContentLoaded', function () {
+		fetch('/ajax/check_premium_status')
+			.then(response => response.json())
+			.then(data => {
+				console.log('Premium status:', data.needs_premium);
+				if (data.needs_premium) {
+					console.log('Showing modal');
+					MicroModal.show('premium-modal');
+				}
+			})
+			.catch(error => console.error('Error:', error));
+	});
+</script> -->
+
+<script>
+	document.addEventListener('DOMContentLoaded', function () {
+		const uploadButton = document.getElementById('upload');
+		const addTimeButton = document.createElement('button');
+		addTimeButton.textContent = '+10時間追加する';
+		addTimeButton.type = 'button';
+		addTimeButton.style.display = 'none';
+		uploadButton.parentNode.insertBefore(addTimeButton, uploadButton.nextSibling);
+
+		function checkStatus() {
+			fetch('/ajax/check_premium_status')
+				.then(response => response.json())
+				.then(data => {
+					console.log('Status:', data);
+					if (data.needs_premium) {
+						MicroModal.show('premium-modal');
+						uploadButton.disabled = true;
+					} else if (data.needs_additional_time) {
+						uploadButton.disabled = true;
+						uploadButton.textContent = 'アップロード制限中';
+						uploadButton.classList.add('btn-secondary');
+						uploadButton.classList.remove('btn-primary');
+
+						addTimeButton.style.display = 'inline-block';
+						addTimeButton.classList.add('btn', 'btn-success');
+						addTimeButton.textContent = '+10時間追加する';
+					} else {
+						uploadButton.disabled = false;
+						addTimeButton.style.display = 'none';
+					}
+				})
+				.catch(error => console.error('Error:', error));
+		}
+
+		addTimeButton.addEventListener('click', function () {
+			event.preventDefault();
+			MicroModal.show('additional-time-modal');
+		});
+
+		document.getElementById('confirm-additional-time').addEventListener('click', function () {
+			event.preventDefault();
+			fetch('/ajax/add_additional_time', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+				}
+			})
+				.then(response => response.json())
+				.then(data => {
+					if (data.success) {
+						MicroModal.close('additional-time-modal');
+						Toastify({
+							text: data.message,
+							duration: 2000,
+							close: true,
+							gravity: "top",
+							position: "center",
+							backgroundColor: "linear-gradient(to right, #00b09b, #96c93d)",
+						}).showToast();
+						checkStatus();  // ステータスを再チェック
+						setTimeout(() => {
+							window.location.reload();
+						}, 3000);
+					} else {
+						alert('エラーが発生しました: ' + data.message);
+					}
+				})
+				.catch(error => console.error('Error:', error));
+		});
+
+		checkStatus();
+		//setInterval(checkStatus, 300000); // 5分ごとにステータスをチェック
+	});
+</script>
 
 {%- endblock %}

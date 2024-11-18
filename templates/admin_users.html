@@ -1,0 +1,93 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<script>
+  localStorage.setItem('page', 'admin');
+</script>
+
+<div class="container-fluid p-0">
+  <h1 class="h3 mb-3">ユーザー管理</h1>
+
+  <div class="row">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="card-title mb-0">ユーザー一覧</h5>
+        </div>
+        <div class="card-body">
+          <table class="table table-striped">
+            <thead>
+              <tr>
+                <th>名前</th>
+                <th>ID</th>
+                <th>メールアドレス</th>
+                <th>利用回数</th>
+                <th>初回ログイン</th>
+                <th>権限</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for user in users %}
+              <tr>
+                <td>{{ user.name }}</td>
+                <td>{{ user.id }}</td>
+                <td>{{ user.email }}</td>
+                <td>{{ user.upload_count }}回</td>
+                <td>{{ user.first_login_date }}</td>
+                <td>
+                  <select class="form-select role-select" data-user-id="{{ user.id }}">
+                    <option value="standard" {% if user.role=='standard' %}selected{% endif %}>標準</option>
+                    <option value="internal" {% if user.role=='internal' %}selected{% endif %}>社内</option>
+                    <option value="premium" {% if user.role=='premium' %}selected{% endif %}>プレミアム</option>
+                    <option value="admin" {% if user.role=='admin' %}selected{% endif %}>管理者</option>
+                  </select>
+                </td>
+                <td>
+                  <button class="btn btn-primary btn-sm update-role" data-user-id="{{ user.id }}">更新</button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const updateButtons = document.querySelectorAll('.update-role');
+    updateButtons.forEach(button => {
+      button.addEventListener('click', function () {
+        const userId = this.getAttribute('data-user-id');
+        const roleSelect = document.querySelector(`.role-select[data-user-id="${userId}"]`);
+        const newRole = roleSelect.value;
+
+        fetch('/admin/update_role', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-CSRFToken': '{{ csrf_token() }}'
+          },
+          body: `user_id=${userId}&role=${newRole}`
+        })
+          .then(response => response.json())
+          .then(data => {
+            if (data.status === 'success') {
+              alert('役割が更新されました');
+            } else {
+              alert('更新に失敗しました');
+            }
+          })
+          .catch(error => {
+            console.error('Error:', error);
+            alert('エラーが発生しました');
+          });
+      });
+    });
+  });
+</script>
+
+{% endblock %}

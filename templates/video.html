@@ -18,12 +18,14 @@
 
 		// 削除ボタンクリック時関数
 		function delete_click(e) {
+			const csrfToken = document.querySelector('#csrf_token').value;
 			loadingElement.style.display = 'block';
 			// APIコール
 			fetch('/ajax/delete', {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
+					'X-CSRFToken': csrfToken
 				},
 				body: JSON.stringify({ id: id }),
 			})
@@ -39,6 +41,7 @@
 				})
 				// レスポンスデータ取得
 				.then(data => {
+					loadingElement.style.display = 'none';
 					console.log('Success:', data);
 					window.location.href = '/movies';
 				})
@@ -75,6 +78,8 @@
 			const confirmButton = document.getElementById('confirmbtn');
 			confirmButton.disabled = true;
 
+			const csrfToken = document.querySelector('#csrf_token').value;
+
 			// ローディングアニメーションを表示
 			loadingElement.style.display = 'block';
 
@@ -85,7 +90,8 @@
 			fetch(window.location.pathname, {
 				method: 'POST',
 				headers: {
-					'Content-Type': 'application/json'
+					'Content-Type': 'application/json',
+					'X-CSRFToken': csrfToken
 				},
 				body: JSON.stringify({ email: email }) // Tagifyからのデータを使用
 			})
@@ -103,8 +109,8 @@
 					if (data.status === 'success') {
 						showToast(`動画を共有しました`, 'success');
 					}
-					else if (data.status === 'warning'){
-						showToast(`${data.message}`,'warning')
+					else if (data.status === 'warning') {
+						showToast(`${data.message}`, 'warning')
 					}
 					else {
 						showToast(`共有に失敗しました: ${data.message}`, 'error');
@@ -185,6 +191,7 @@
 
 					<footer class="modal__footer">
 						<input type="hidden" name="id" value="{{ data.id }}">
+						<input type="hidden" id="csrf_token" name="csrf_token" value="{{ csrf_token() }}">
 						<input type="submit" class="modal__btn modal__btn-primary" value="登録">
 					</footer>
 				</form>
@@ -193,222 +200,241 @@
 		</div>
 	</div>
 
-	<h1 class="h3 mb-3">{{data.title}}</h1>
+	<!-- <h1 class="h3 mb-3">{{data.title}}</h1> -->
+	<h1 id="video-title" class="h3 mb-3">
+		<span id="title-display">{{data.title}}</span>
+		<input type="text" id="title-edit" class="form-control d-none" value="{{data.title}}">
+		<button id="edit-title-btn"><i class="align-middle" data-feather="edit"></i></button>
+		<button id="save-title-btn" class="btn btn-sm btn-success ml-2 d-none">保存</button>
+	</h1>
 
 	<div class="row">
 		<!-- 最左列：上下二段 -->
 		<div class="col-xl-4 col-xxl-4">
-			<!-- 上段：ビデオ -->
-			<div class="card flex-fill w-100">
-				<div id="v_container" class="card-body center mb-3 d-flex flex-row">
-					<video width="100%" controls preload="auto">
-						<source src="/stream/{{ data.id }}" type="video/mp4">
-						Your browser does not support the video tag.
-					</video>
-				</div>
-				<div class="card-body d-flex">
-					<table>
-						<tbody>
-							<tr>
-								<th>収録日</th>
-								<td>
-									<form method="post" action="/ajax/changedate" name="dateform" id="date">
-										<input type="input" id="datepicker" value="{{data.date}}" name="date">
-									</form>
-									<script>
-										flatpickr('#datepicker', {
-											locale: 'ja',
-											dateFormat: 'Y-m-d',
-											onValueUpdate: function (selectedDates, dateStr, instance) {
-												const loadingElement = document.getElementById('loading');
-												const id = '{{ data.id }}';
-												loadingElement.style.display = 'block';
-												// APIコール
-												fetch('/ajax/changedate', {
-													method: 'POST',
-													headers: {
-														'Content-Type': 'application/json',
-													},
-													body: JSON.stringify({ id: id, date: dateStr }),
-												})
-													// レスポンス受信
-													.then(response => {
-														// レスポンス異常
-														if (!response.ok) {
+			<div class="sticky-column">
+				<!-- 上段：ビデオ -->
+				<div class="card flex-fill w-100">
+					<div id="v_container" class="card-body center mb-3 d-flex flex-row">
+						<video width="100%" controls preload="auto">
+							<source src="/stream/{{ data.id }}" type="video/mp4">
+							Your browser does not support the video tag.
+						</video>
+					</div>
+					<div class="card-body d-flex">
+						<table>
+							<tbody>
+								<tr>
+									<th>収録日</th>
+									<td>
+										<form method="post" action="/ajax/changedate" name="dateform" id="date">
+											<input type="input" id="datepicker" value="{{data.date}}" name="date">
+										</form>
+										<script>
+											flatpickr('#datepicker', {
+												locale: 'ja',
+												dateFormat: 'Y-m-d',
+												onValueUpdate: function (selectedDates, dateStr, instance) {
+													const loadingElement = document.getElementById('loading');
+													const csrfToken = document.querySelector('#csrf_token').value;
+													const id = '{{ data.id }}';
+													loadingElement.style.display = 'block';
+													// APIコール
+													fetch('/ajax/changedate', {
+														method: 'POST',
+														headers: {
+															'Content-Type': 'application/json',
+															'X-CSRFToken': csrfToken
+														},
+														body: JSON.stringify({ id: id, date: dateStr }),
+													})
+														// レスポンス受信
+														.then(response => {
+															// レスポンス異常
+															if (!response.ok) {
+																loadingElement.style.display = 'none';
+																alert('Network Error:' + response.statusText);
+															}
+															// レスポンス正常
+															return response.json();
+														})
+														// レスポンスデータ取得
+														.then(data => {
+															console.log('Success:', data);
+															location.reload(); // レスポンスが正常ならリロード
+														})
+														// エラーハンドリング
+														.catch((error) => {
 															loadingElement.style.display = 'none';
-															alert('Network Error:' + response.statusText);
-														}
-														// レスポンス正常
-														return response.json();
-													})
-													// レスポンスデータ取得
-													.then(data => {
-														console.log('Success:', data);
-														location.reload(); // レスポンスが正常ならリロード
-													})
-													// エラーハンドリング
-													.catch((error) => {
-														loadingElement.style.display = 'none';
-														console.error('Error:', error);
-													});
-											}
-										});
-									</script>
-								</td>
-								<!-- <td>{{ data.date }}</td> -->
-							</tr>
-							<tr>
-								<th>議事録作成日時</th>
-								<td>{{ data.created_at }}</td>
-							</tr>
-							<tr>
-								<th>動画ID</th>
-								<td>{{ data.id }}</td>
-							</tr>
-							<tr>
-								<th>ステータス</th>
-								<td>{{ data.status }}</td>
-							</tr>
-							<tr>
-								<th></th>
-								<td class="pt-3">
-									<!-- <button type="button" class="btn btn-outline-success">Download text</button> -->
-									<button type="button" class="btn btn-outline-danger" id="deletebtn">Delete</button>
-									<button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#Modal" id="sharebtn">Share</button>
-								</td>
-							</tr>
-						</tbody>
-					</table>
+															console.error('Error:', error);
+														});
+												}
+											});
+										</script>
+									</td>
+								</tr>
+								<tr>
+									<th>議事録作成日時</th>
+									<td>{{ data.created_at }}</td>
+								</tr>
+								<tr>
+									<th>動画ID</th>
+									<td>{{ data.id }}</td>
+								</tr>
+								<tr>
+									<th>ステータス</th>
+									<td>{{ data.status }}</td>
+								</tr>
+								<tr>
+									<th></th>
+									<td class="pt-3">
+										<button type="button" class="btn btn-outline-danger" id="deletebtn">Delete</button>
+										<button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#Modal" id="sharebtn">Share</button>
+									</td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
 				</div>
-			</div>
-			<!-- 下段：ステータス -->
-			<div class="card flex-fill w-100 mt-3">
-				<div class="card-header">
-					<h5 class="card-title mb-0">コメント</h5>
-					<button data-micromodal-trigger="modal-1" class="modal-open" id="btn_comment"><i class="align-middle" data-feather="edit"></i></button>
-				</div>
-				<div class="card-body d-flex">
-					<p>{{data.comment}}</p>
+				<!-- 下段：ステータス -->
+				<div class="card flex-fill w-100 mt-3">
+					<div class="card-header">
+						<h5 class="card-title mb-0">コメント</h5>
+						<button data-micromodal-trigger="modal-1" class="modal-open" id="btn_comment"><i class="align-middle" data-feather="edit"></i></button>
+					</div>
+					<div class="card-body d-flex">
+						<p>{{data.comment}}</p>
+					</div>
 				</div>
 			</div>
 		</div>
 
-		<!-- 中列：要約 -->
-		<div class="col-xl-4 col-xxl-4 d-flex flex-column">
-			<div class="card flex-fill w-100">
-				<div class="card-header">
-					<h5 class="card-title mb-0">要約</h5>
-					<button id="edit-button"><i class="align-middle" data-feather="edit"></i></button>
-				</div>
-				<div class="card-body d-flex" id="summary">
-					<p>{{data.summary}}</p>
-				</div>
-			</div>
-		</div>
+		<!-- 中央と右のカラム用のコンテナ -->
+		<div class="col-xl-8 col-xxl-8">
+			<div class="scrollable-container">
+				<div class="row summary-transcript-container">
+					<!-- 中列：要約 -->
+					<div class="col-xl-6 col-12">
+						<div class="card flex-fill w-100">
+							<div class="card-header">
+								<h5 class="card-title mb-0">要約</h5>
+								<button id="edit-button"><i class="align-middle" data-feather="edit"></i></button>
+							</div>
+							<div class="card-body d-flex" id="summary">
+								<p>{{data.summary}}</p>
+							</div>
+						</div>
+					</div>
 
-		<link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
-		<script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
-		<script src="https://cdn.jsdelivr.net/npm/turndown@5.0.3/dist/turndown.js"></script>
-
-		<script>
-			let quillInstance = null;
-			const editButton = document.getElementById('edit-button');
-
-			editButton.addEventListener('click', function () {
-				if (!quillInstance) {
-					// Quillエディタのインスタンスを作成
-					quillInstance = new Quill('#summary', {
-						theme: 'snow'
-					});
-
-					// ボタンの内容を「編集完了」に変更
-					editButton.innerHTML = '編集完了';
-					editButton.classList = 'btn btn-outline-primary'; // この行は削除または変更
-					editButton.id = 'complete-edit'; // この行は削除または変更
-
-				} else {
-					// エディタの内容をHTMLとして取得
-					const content = quillInstance.root.innerHTML;
-
-					// HTMLをマークダウンに変換
-					const turndownService = new TurndownService();
-
-					// インデントの深さを判断し、適切な数のタブを追加するカスタムルール
-					turndownService.addRule('listItemIndent', {
-						filter: ['li'],
-						replacement: function (content, node) {
-							let bullet = '-';
-							const parentNode = node.parentNode;
-							const parentTagName = parentNode.nodeName.toLowerCase();
-							let prefix = '';
-							let indent = '';
-							let suffix = '';
-
-							// 親がOLの場合、正しい番号付けを行う
-							if (parentTagName === 'ol') {
-								const start = parentNode.getAttribute('start');
-								const index = Array.prototype.indexOf.call(parentNode.children, node);
-								bullet = `${start ? parseInt(start, 10) + index : index + 1}.`;
-							}
-
-							// インデントの深さを計算（ql-indent-x クラスを基に）
-							const indentClass = Array.from(node.classList).find(className => className.startsWith('ql-indent-'));
-							if (indentClass) {
-								const indentLevel = parseInt(indentClass.split('-').pop(), 10);
-								indent = '    '.repeat(indentLevel); // 1レベルのインデントにつきスペース2つを使用
-							}
-
-							// ネストされたリストアイテムの場合、接頭辞として改行を追加
-							if (parentNode.parentNode.nodeName.toLowerCase() === 'li') {
-								prefix = '\n';
-							} else {
-								// ルートレベルのリストアイテムの場合、接頭辞として2つの改行を追加（Markdownではリストの前に空行が必要）
-								prefix = '\n\n';
-							}
-
-							// コンテンツが複数の段落にまたがる場合、接尾辞として改行を追加
-							if (content.includes('\n')) {
-								suffix = '\n';
-							}
-
-							// リストアイテムのマークダウンを構築
-							return `${prefix}${indent}${bullet} ${content.trim()}${suffix}`;
-						}
-					});
-
-					const markdown = turndownService.turndown(content);
-
-					// マークダウンをサーバにPOST
-					fetch('/ajax/editsummary', {
-						method: 'POST',
-						headers: {
-							'Content-Type': 'application/json'
-						},
-						body: JSON.stringify({ id: "{{ data.id }}", summary: markdown })
-					}).then(function (response) {
-						// エディタを破棄
-						quillInstance = null;
-						location.reload(); // レスポンスが正常ならリロード
-					});
-				}
-			});
-
-
-
-		</script>
-
-		<!-- 右列：書き起こし -->
-		<div class="col-xl-4 col-xxl-4 d-flex flex-column">
-			<div class="card flex-fill w-100">
-				<div class="card-header">
-					<h5 class="card-title mb-0">書き起こし</h5>
-				</div>
-				<div class="card-body d-flex">
-					<p>{{data.transcript}}</p>
+					<!-- 右列：書き起こし -->
+					<div class="col-xl-6 col-12">
+						<div class="card flex-fill w-100">
+							<div class="card-header">
+								<h5 class="card-title mb-0">書き起こし</h5>
+							</div>
+							<div class="card-body d-flex">
+								<p>{{data.transcript}}</p>
+							</div>
+						</div>
+					</div>
 				</div>
 			</div>
 		</div>
 	</div>
+
+	<link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+	<script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/turndown@5.0.3/dist/turndown.js"></script>
+
+	<script>
+		let quillInstance = null;
+		const editButton = document.getElementById('edit-button');
+
+		editButton.addEventListener('click', function () {
+			if (!quillInstance) {
+				// Quillエディタのインスタンスを作成
+				quillInstance = new Quill('#summary', {
+					theme: 'snow'
+				});
+
+				// ボタンの内容を「編集完了」に変更
+				editButton.innerHTML = '編集完了';
+				editButton.classList = 'btn btn-outline-primary'; // この行は削除または変更
+				editButton.id = 'complete-edit'; // この行は削除または変更
+
+			} else {
+				// エディタの内容をHTMLとして取得
+				const content = quillInstance.root.innerHTML;
+
+				// HTMLをマークダウンに変換
+				const turndownService = new TurndownService();
+
+				// インデントの深さを判断し、適切な数のタブを追加するカスタムルール
+				turndownService.addRule('listItemIndent', {
+					filter: ['li'],
+					replacement: function (content, node) {
+						let bullet = '-';
+						const parentNode = node.parentNode;
+						const parentTagName = parentNode.nodeName.toLowerCase();
+						let prefix = '';
+						let indent = '';
+						let suffix = '';
+
+						// 親がOLの場合、正しい番号付けを行う
+						if (parentTagName === 'ol') {
+							const start = parentNode.getAttribute('start');
+							const index = Array.prototype.indexOf.call(parentNode.children, node);
+							bullet = `${start ? parseInt(start, 10) + index : index + 1}.`;
+						}
+
+						// インデントの深さを計算（ql-indent-x クラスを基に）
+						const indentClass = Array.from(node.classList).find(className => className.startsWith('ql-indent-'));
+						if (indentClass) {
+							const indentLevel = parseInt(indentClass.split('-').pop(), 10);
+							indent = '    '.repeat(indentLevel); // 1レベルのインデントにつきスペース2つを使用
+						}
+
+						// ネストされたリストアイテムの場合、接頭辞として改行を追加
+						if (parentNode.parentNode.nodeName.toLowerCase() === 'li') {
+							prefix = '\n';
+						} else {
+							// ルートレベルのリストアイテムの場合、接頭辞として2つの改行を追加（Markdownではリストの前に空行が必要）
+							prefix = '\n\n';
+						}
+
+						// コンテンツが複数の段落にまたがる場合、接尾辞として改行を追加
+						if (content.includes('\n')) {
+							suffix = '\n';
+						}
+
+						// リストアイテムのマークダウンを構築
+						return `${prefix}${indent}${bullet} ${content.trim()}${suffix}`;
+					}
+				});
+
+				const markdown = turndownService.turndown(content);
+				const csrfToken = document.querySelector('#csrf_token').value;
+
+				// マークダウンをサーバにPOST
+				fetch('/ajax/editsummary', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'X-CSRFToken': csrfToken
+					},
+					body: JSON.stringify({ id: "{{ data.id }}", summary: markdown })
+				}).then(function (response) {
+					// エディタを破棄
+					quillInstance = null;
+					location.reload(); // レスポンスが正常ならリロード
+				});
+			}
+		});
+
+
+
+	</script>
+
+
 
 </div>
 
@@ -425,6 +451,7 @@
 					<div class="mb-3">
 						<label for="email" class="col-form-label">メールアドレス:</label>
 						<input type="text" class="form-control" id="email" name="email">
+						<input type="hidden" id="csrf_token" name="csrf_token" value="{{ csrf_token() }}">
 					</div>
 				</div>
 				<div class="modal-footer">
@@ -453,6 +480,48 @@
 		awaitOpenAnimation: true,
 		awaitCloseAnimation: true
 	});
+</script>
+
+<script>
+	document.getElementById('edit-title-btn').addEventListener('click', function () {
+		document.getElementById('title-display').classList.add('d-none');
+		document.getElementById('title-edit').classList.remove('d-none');
+		this.classList.add('d-none');
+		document.getElementById('save-title-btn').classList.remove('d-none');
+	});
+
+	document.getElementById('save-title-btn').addEventListener('click', function () {
+		const newTitle = document.getElementById('title-edit').value;
+		const csrfToken = document.querySelector('#csrf_token').value;
+		fetch('/ajax/update_title', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'X-CSRFToken': csrfToken
+			},
+			body: JSON.stringify({
+				id: '{{ data.id }}',
+				title: newTitle
+			}),
+		})
+			.then(response => response.json())
+			.then(data => {
+				if (data.status === 'success') {
+					document.getElementById('title-display').textContent = newTitle;
+					document.getElementById('title-display').classList.remove('d-none');
+					document.getElementById('title-edit').classList.add('d-none');
+					this.classList.add('d-none');
+					document.getElementById('edit-title-btn').classList.remove('d-none');
+				} else {
+					alert('タイトルの更新に失敗しました: ' + data.message);
+				}
+			})
+			.catch((error) => {
+				console.error('Error:', error);
+				alert('エラーが発生しました。');
+			});
+	});
+
 </script>
 
 <!-- ローディングアニメーション -->

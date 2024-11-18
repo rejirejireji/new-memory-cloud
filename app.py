@@ -10,8 +10,11 @@ from flask import (
     send_from_directory,
     redirect,
     url_for,
+    current_app,
     stream_with_context,
 )
+from functools import partial
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from flask_dance.contrib.google import make_google_blueprint, google
@@ -22,7 +25,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from celery import Celery
 from google.cloud import storage
 from google.cloud.exceptions import NotFound
+from urllib.parse import quote
 import requests
+import base64
+import hashlib
 import uuid
 import markdown as md
 import pymysql
@@ -38,14 +44,26 @@ import ffmpeg
 import slackweb
 import logging
 import tempfile
+import errno
+from datetime import datetime, timedelta
 from pprint import pprint
 from functools import wraps
 from dotenv import load_dotenv
 from flask_caching import Cache
+from flask_wtf.csrf import CSRFProtect
+from flask_wtf import csrf
+from flask_wtf.csrf import generate_csrf
 
 load_dotenv("/var/www/html/app/.env")
 pymysql.install_as_MySQLdb()
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key'
+csrf = CSRFProtect(app)
+
+# すべてのテンプレートでCSRFトークンを利用可能にする
+@app.context_processor
+def inject_csrf_token():
+    return dict(csrf_token=generate_csrf) 
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -66,6 +84,10 @@ app.config["SLACK_WEBHOOK_URI"] = os.environ.get("SLACK_WEBHOOK_URI")
 app.config["REDIRECT_URL"] = os.environ.get("REDIRECT_URL")
 app.config["CELERY_BROKER_URL"] = os.environ.get("CELERY_BROKER_URL")
 app.config["CELERY_RESULT_BACKEND"] = os.environ.get("CELERY_BROKER_BACKEND")
+
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+SERVICE_ACCOUNT_FILE = os.environ.get("SERVICE_ACCOUNT")
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 
 # slack（デバッグ用）
 slack = slackweb.Slack(url=app.config["SLACK_WEBHOOK_URI"])
@@ -108,6 +130,13 @@ class User(db.Model):
     role = db.Column(db.String(15))
     password = db.Column(db.String(255))
     folder_id = db.Column(db.String(255))
+    upload_count = db.Column(db.Integer, default=0) 
+    total_upload_duration = db.Column(db.Integer, default=0) 
+    first_login_date = db.Column(db.Date)
+    additional_hours = db.Column(db.Integer, default=0)
+    last_additional_time_purchase = db.Column(db.Date)
+    monthly_used_hours = db.Column(db.Float, default=0)
+    last_reset_date = db.Column(db.Date)
 
 
 # サマリーテーブルのモデル定義
@@ -310,14 +339,32 @@ redis_url = os.environ.get("CELERY_BROKER_URL")
 # キャッシュの設定
 cache = Cache(app, config={"CACHE_TYPE": "RedisCache", "CACHE_REDIS_URL": redis_url})
 
+def generate_cache_key(function, user_id):
+    # 関数名とユーザーIDを組み合わせてキャッシュキーを生成
+    key = f"{function.__name__}:{user_id}"
+    return hashlib.md5(key.encode()).hexdigest()
+
+def clear_user_movies_cache(user_id):
+    with current_app.app_context():
+        # 手動でキャッシュキーを生成
+        cache_key = generate_cache_key(movies, user_id)
+        # 特定のキャッシュキーを削除
+        cache.delete(cache_key)
 
 # ファイルリスト
 @app.route("/movies", methods=["GET"])
 @login_required
-@cache.memoize(timeout=100)  # 5分間キャッシュ
 def movies():
     # ユーザー情報取得
     user = get_userdata()
+
+    # キャッシュキーを手動で生成
+    cache_key = generate_cache_key(movies, user.id)
+    
+    # キャッシュされたデータがあれば返す
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return cached_data
 
     # ページネーションパラメータ
     page_size = 100  # 一度に取得するファイル数
@@ -345,7 +392,7 @@ def movies():
     # SummaryDBのデータ取得（バッチで取得）
     file_ids = [f["id"] for f in all_files]
     db_data = (
-        db.session.query(Summary.id, Summary.status, Summary.created_at, Summary.date)
+        db.session.query(Summary.id, Summary.status, Summary.created_at, Summary.date, Summary.title)
         .filter(Summary.id.in_(file_ids))
         .all()
     )
@@ -365,9 +412,13 @@ def movies():
             f["status"] = record.status
             f["created_at"] = record.created_at
             f["date"] = record.date
+            f["name"] = record.title
             result_list.append(f)
 
-    return render_template("movies.html", objects=result_list)
+    # 結果をキャッシュし、テンプレートをレンダリング
+    rendered_template = render_template("movies.html", objects=result_list)
+    cache.set(cache_key, rendered_template, timeout=100)  # 100秒間キャッシュ
+    return rendered_template
 
 
 # 共有中リスト
@@ -384,7 +435,34 @@ def sharing():
         .filter(Share.owner_id == user.id)
     )
 
-    return render_template("sharing.html", objects=res)
+    gcs_client = storage.Client()
+    bucket = gcs_client.bucket("mc_shared")
+
+    sharing_data = []
+
+    for share in res:
+        thumbnail_blob = bucket.blob(f'thumbnails/{share.video_id}')
+        
+        # blobの存在確認
+        if thumbnail_blob.exists():
+            thumbnail_url = thumbnail_blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(hours=1),
+                method="GET"
+            )
+        else:
+            thumbnail_url = ""
+            
+        encoded_url = quote(thumbnail_url, safe='')
+            
+        sharing_data.append({
+            "video_id": share.video_id,
+            "guest_email": share.guest_email,
+            "title": share.title,
+            "thumbnailLink": encoded_url,
+        })
+
+    return render_template("sharing.html", objects=sharing_data)
 
 
 # 共有（され）リスト
@@ -409,20 +487,25 @@ def shared():
 
     for share in res:
         thumbnail_blob = bucket.blob(f'thumbnails/{share.video_id}')
-        thumbnail_url = thumbnail_blob.generate_signed_url(
-            version="v4",
-            expiration=datetime.timedelta(hours=1),
-            method="GET"
-        )
-        thumbnail_url_escaped = Markup(json.dumps(thumbnail_url))
-        print(thumbnail_url)
-
+        
+        # blobの存在確認
+        if thumbnail_blob.exists():
+            thumbnail_url = thumbnail_blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(hours=1),
+                method="GET"
+            )
+        else:
+            thumbnail_url = ""
+            
+        encoded_url = quote(thumbnail_url, safe='')
+            
         shared_data.append({
             "created_at": share.created_at,
             "date": share.date,
             "name": share.name,
             "title": share.title,
-            "thumbnailLink": thumbnail_url_escaped,
+            "thumbnailLink": encoded_url,
             "shared_id": share.shared_id
         })
 
@@ -629,7 +712,7 @@ def compress_and_upload_to_gcs(self, file_content, file_id, bucket_name, thumbna
         }
 
     except ffmpeg.Error as e:
-        logger.error(f"FFmpeg compression failed for {file_id}: {e.stderr.decode()}")
+        logger.error(f"{file_id}: {e.stderr.decode()}")
         blob.upload_from_string(file_content)
         return {
             "status": "warning",
@@ -771,53 +854,269 @@ def stream_shared(file_id):
 
     return Response(stream_with_context(generate()), status=status, headers=headers)
 
+# 当月内アップロード時間
+def get_monthly_upload_time(user_id):
+    try:
+        user = User.query.filter_by(id=user_id).first()
+        if not user:
+            return 0
+
+        return user.monthly_used_hours
+
+    except Exception as e:
+        print(f"Error in get_monthly_upload_time: {str(e)}")
+        return 0
+
+def reset_monthly_usage(user):
+    today = datetime.now().date()
+    if user.last_reset_date is None or user.last_reset_date.month != today.month:
+        user.monthly_used_hours = 0
+        user.additional_hours = 0
+        user.last_reset_date = today
+        db.session.commit()
+
+# ajax: プレミアムステータス
+@app.route("/ajax/check_premium_status", methods=["GET"])
+@login_required
+def check_premium_status():
+    try:
+        user = get_userdata()
+        reset_monthly_usage(user)
+        
+        monthly_upload_time = get_monthly_upload_time(user.id)
+        one_month_ago = datetime.now().date() - timedelta(days=30)
+        
+        needs_premium = user.role == 'standard'
+        needs_additional_time = user.role == 'premium' and monthly_upload_time > (30 + user.additional_hours)
+        
+        additional_hours_needed = math.ceil((monthly_upload_time - (30 + user.additional_hours)) / 10) if needs_additional_time else 0
+        
+        return jsonify({
+            "needs_premium": needs_premium,
+            "needs_additional_time": needs_additional_time,
+            "additional_hours_needed": additional_hours_needed
+        })
+    except Exception as e:
+        print(f"Error in check_premium_status: {str(e)}")
+        return jsonify({"error": "An error occurred while checking premium status"}), 500
+
+# 追加課金情報スプレッドシート書き込み
+@celery.task(name='app.write_to_spreadsheet')
+def write_to_spreadsheet(user_name, email):
+    try:
+        creds = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        
+        service = build('sheets', 'v4', credentials=creds)
+        sheet = service.spreadsheets()
+        
+        values = [[user_name, email, datetime.now().strftime("%Y-%m-%d %H:%M:%S")]]
+        body = {'values': values}
+        
+        result = sheet.values().append(
+            spreadsheetId=SPREADSHEET_ID, range='追加課金表!A:C',
+            valueInputOption='USER_ENTERED', body=body).execute()
+        
+        print(f"{result.get('updates').get('updatedCells')} cells appended.")
+        return True
+    except Exception as e:
+        print(f"An error occurred in write_to_spreadsheet: {str(e)}")
+        print(f"Service Account File: {SERVICE_ACCOUNT_FILE}")
+        print(f"Spreadsheet ID: {SPREADSHEET_ID}")
+        return False
+
+# 追加課金
+@app.route("/ajax/add_additional_time", methods=["POST"])
+@login_required
+def add_additional_time():
+    user = get_userdata()
+    reset_monthly_usage(user)
+    
+    # 非同期でスプレッドシートに書き込み
+    write_to_spreadsheet.delay(user.name, user.email)
+    
+    # ユーザーの利用可能時間を更新
+    user.additional_hours += 10
+    db.session.commit()
+    
+    return jsonify({"success": True, "message": "追加時間が購入されました"})
+
+# 利用時間更新
+def update_usage_time(user_id, duration):
+    try:
+        user = User.query.filter_by(id=user_id).first()
+        if not user:
+            return
+
+        # 現在の日付が先月以降かチェック
+        reset_monthly_usage(user)
+
+        # 使用時間を時間単位で加算（秒から時間に変換）
+        user.monthly_used_hours += duration / 3600
+        db.session.commit()
+
+    except Exception as e:
+        print(f"Error in update_monthly_usage: {str(e)}")
+        db.session.rollback()
 
 # ホーム
-@app.route("/home", methods=["GET"])
+@app.route("/home")
 @login_required
 def home():
-    return render_template("home.html")
+    user = get_userdata()
 
+    status_mapping = {
+        'Complete': '議事録作成済み',
+        'Unprocessed': '処理待ち',
+        'uploading': 'アップロード中',
+        'Encode': 'エンコード中',
+        'Transcript': '書き起こし中',
+        'Timecode': 'タイムコード生成中',
+        'Summarize': '議事録作成中',
+        'uploaded': 'アップロード完了',
+        'failed': 'エラー'
+    }
+
+    # 総アップロード回数と総時間
+    upload_count = user.upload_count
+    total_upload_duration = user.total_upload_duration // 60  # 分単位に変換
+
+    # 動画ステータス
+    video_statuses = {
+        status: Summary.query.filter_by(userid=user.id, status=status).count()
+        for status in status_mapping.keys()
+    }
+
+    # 処理中の動画数（'Complete'と'failed'以外のすべてのステータス）
+    processing_videos = Summary.query.filter(
+        Summary.userid == user.id,
+        ~Summary.status.in_(['Complete', 'failed'])
+    ).count()
+
+    # 最近のアクティビティ（直近5件）
+    recent_activities = Summary.query.filter_by(userid=user.id).order_by(Summary.created_at.desc()).limit(5).all()
+    recent_activity = [
+        {
+            'status': activity.status,
+            'title': activity.title
+        } for activity in recent_activities
+    ]
+
+    # デバッグ: 最近のアクティビティを出力
+    for activity in recent_activities:
+        print(f"Debug: Recent activity - Title: {activity.title}, Status: {activity.status}")
+
+    def get_status_description(status):
+        descriptions = {
+            'Complete': '議事録作成済み',
+            'Unprocessed': '処理待ち',
+            'uploading': 'アップロード中',
+            'Encode': 'エンコード中',
+            'Transcript': '書き起こし中',
+            'Timecode': 'タイムコード生成中',
+            'Summarize': '議事録作成中',
+            'uploaded': 'アップロード完了',
+            'failed': 'エラー'
+        }
+        return descriptions.get(status, status)
+
+    monthly_upload_time = get_monthly_upload_time(user.id) * 60 
+    
+    # 初回ログイン日設定（設定されていない場合）
+    if user.first_login_date is None:
+        user.first_login_date = datetime.now().date()
+        db.session.commit()
+    
+    return render_template("home.html",
+                           upload_count=upload_count,
+                           total_upload_duration=total_upload_duration,
+                           processing_videos=processing_videos,
+                           video_statuses=video_statuses,
+                           status_mapping=status_mapping,
+                           recent_activity=recent_activity,
+                           monthly_upload_time=monthly_upload_time,
+                           get_status_description=get_status_description)
+
+# プライバシーポリシー
+@app.route("/privacy", methods=["GET"])
+def privacy():
+    return render_template("privacy.html")
+
+# 利用規約
+@app.route("/terms", methods=["GET"])
+def terms():
+    return render_template("terms.html")
 
 # 非同期ダウンロード（GDrive => サーバ）
 @celery.task
-def drivetosvr(id, token):
+def drivetosvr(id, token, userid):
     with app.app_context():
         try:
             headers = {"Authorization": f"Bearer {token}"}
             resp = requests.get(
                 f"https://www.googleapis.com/drive/v3/files/{id}?alt=media",
                 headers=headers,
+                stream=True,  # ストリーミングモードを有効化
             )
 
             if resp.status_code != 200:
-                # ステータス書き込み「失敗」
-                set_status(id, "failed", 0)
+                set_status(id, "failed", 0, userid)
                 return
 
-            # Googleドライブ ⇒ サーバに保存
-            filepath = os.path.join(app.root_path, app.config["UPLOAD_FOLDER"], id)
+            # アップロードフォルダのパスを取得
+            upload_folder = os.path.join(app.root_path, app.config["UPLOAD_FOLDER"])
+            
+            # アップロードフォルダが存在しない場合は作成
+            if not os.path.exists(upload_folder):
+                try:
+                    os.makedirs(upload_folder)
+                except OSError as exc:
+                    if exc.errno != errno.EEXIST:
+                        raise
+
+            filepath = os.path.join(upload_folder, id)
+
+            # ファイルを書き込みモードで開く
             with open(filepath, "wb") as f:
-                for chunk in resp.iter_content(
-                    chunk_size=32768
-                ):  # chunk_sizeは適宜調整
-                    if chunk:  # チャンクが空でないことを確認
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if chunk:
                         f.write(chunk)
 
             # ステータス書き込み「アップロード完了」
-            set_status(id, "uploaded", 0)
-            main_process(filepath, id)
-            os.remove(filepath)
+            set_status(id, "uploaded", 0, userid)
+            main_process(filepath, id, userid)
+            
+            # 処理が完了したらファイルを削除
+            if os.path.exists(filepath):
+                os.remove(filepath)
 
+        except requests.RequestException as e:
+            print(f"Network error in drivetosvr: {str(e)}")
+            set_status(id, "failed", 0, userid)
+        except OSError as e:
+            print(f"OS error in drivetosvr: {str(e)}")
+            set_status(id, "failed", 0, userid)
         except Exception as e:
-            # エラー情報をログに記録
-            set_status(id, "failed", 0)
-            raise e
+            print(f"Unexpected error in drivetosvr: {str(e)}")
+            set_status(id, "failed", 0, userid)
 
+@app.route("/user/stats")
+@login_required
+def user_stats():
+    user = get_userdata()
+    total_minutes = user.total_upload_duration // 60  # 秒を分に変換
+    
+    return render_template(
+        "user_stats.html", 
+        upload_count=user.upload_count, 
+        total_upload_duration=total_minutes
+    )
 
 # アップロード
 @app.route("/ajax/upload", methods=["POST"])
 def upload():
+    user = get_userdata()
+    
     # ファイルキーがそもそもなかった時エラー
     if "file" not in request.files:
         return jsonify(message="ファイルがありません"), 400
@@ -826,7 +1125,6 @@ def upload():
     # ファイル名が空だった時エラー
     if file.filename == "":
         return jsonify(message="ファイルが選択されていません"), 400
-    user = get_userdata()
     result = to_drive(file, user.folder_id)
 
     if result == "404":
@@ -856,9 +1154,11 @@ def upload():
 
         db.session.add(itemcreate)
         db.session.commit()
-
+        
         token = google.token["access_token"]
-        drivetosvr.delay(result, token)
+        drivetosvr.delay(result, token, user.id)
+        
+        clear_user_movies_cache(user.id)
 
         return jsonify(message="アップロード完了", file_id=result), 200
     else:
@@ -873,31 +1173,42 @@ def to_drive(file, folder_id):
     # ファイルのメタデータを設定
     file_metadata = {"name": os.path.splitext(file.filename)[0], "parents": [folder_id]}
 
-    # ファイルをGoogle Driveにアップロード
-    result = google.post(
-        "/upload/drive/v3/files?uploadType=multipart",
-        files={
-            "data": (
-                "metadata",
-                json.dumps(file_metadata),
-                "application/json; charset=UTF-8",
-            ),
-            "file": (
-                os.path.splitext(file.filename)[0],
-                file.stream,
-                "application/octet-stream",
-            ),
-        },
-    )
+    try:
+            # ファイルをGoogle Driveにアップロード
+            result = google.post(
+                "/upload/drive/v3/files?uploadType=multipart",
+                files={
+                    "data": (
+                        "metadata",
+                        json.dumps(file_metadata),
+                        "application/json; charset=UTF-8",
+                    ),
+                    "file": (
+                        os.path.splitext(file.filename)[0],
+                        file.stream,
+                        "application/octet-stream",
+                    ),
+                },
+            )
 
-    if result.status_code == 200:
-        file_id = result.json().get("id")
-        return file_id
+            print(f"to_drive: API response status code: {result.status_code}")  # デバッグ出力
 
-    return None
+            if result.status_code == 200:
+                file_id = result.json().get("id")
+                print(f"to_drive: File uploaded successfully. File ID: {file_id}")  # デバッグ出力
+                return file_id
+            elif result.status_code == 404:
+                return "404"
+            else:
+                print(f"to_drive: Upload failed. Response: {result.text}")  # デバッグ出力
+                return None
+
+    except Exception as e:
+        print(f"to_drive: Exception occurred: {str(e)}")  # デバッグ出力
+        return None
 
 
-def main_process(filepath, id):
+def main_process(filepath, id, userid):
     data = {}
     text = ""
     text_withtime = ""
@@ -920,17 +1231,17 @@ def main_process(filepath, id):
                 app.root_path, app.config["AUDIO_FOLDER"], f"{id}_audio.mp3"
             )
 
-            set_status(id, "Encode", 10)
+            set_status(id, "Encode", 10, userid)
             encode(filepath, output_file)
 
-            set_status(id, "Transcript", 40)
+            set_status(id, "Transcript", 40, userid)
             transcript = whisper(output_file)
             text = formattext(transcript.segments)
 
-            set_status(id, "Timecode", 60)
+            set_status(id, "Timecode", 60, userid)
             text_withtime += timecode(transcript.segments, 0)["text"]
 
-            set_status(id, "Summarize", 80)
+            set_status(id, "Summarize", 80, userid)
             os.remove(output_file)
 
         # 尺が指定時間超え
@@ -943,7 +1254,7 @@ def main_process(filepath, id):
                 current_basestep = ((1 + t / split_time) - 1) * 3
 
                 # 進捗率：30% + α
-                set_status(id, "Encode", (current_basestep + 1) / total_steps * 80)
+                set_status(id, "Encode", (current_basestep + 1) / total_steps * 80, userid)
 
                 # 音声ファイル
                 output_file = os.path.join(
@@ -954,7 +1265,7 @@ def main_process(filepath, id):
                 encode(filepath, output_file, t, split_time)
 
                 # 進捗率：40% + α
-                set_status(id, "Transcript", (current_basestep + 2) / total_steps * 80)
+                set_status(id, "Transcript", (current_basestep + 2) / total_steps * 80, userid)
 
                 # 文字起こし
                 transcript = whisper(output_file)
@@ -965,7 +1276,7 @@ def main_process(filepath, id):
                     raise Exception("whisper: error")
 
                 # 進捗率：60% + α
-                set_status(id, "Timecode", (current_basestep + 3) / total_steps * 80)
+                set_status(id, "Timecode", (current_basestep + 3) / total_steps * 80, userid)
 
                 # タイムコード
                 tc = timecode(transcript.segments, offset)
@@ -984,7 +1295,7 @@ def main_process(filepath, id):
             current_basestep = (1 + start / max_len) - 1
             set_status(
                 id, "Summarize", 80 + ((current_basestep + 1) / total_steps * 20) - 1
-            )
+            , userid)
             end = start + max_len
 
             # 部分文字列を取得
@@ -1000,7 +1311,9 @@ def main_process(filepath, id):
             start = end
 
         # 進捗率：100%
-        set_status(id, "Complete", 100)
+        set_status(id, "Complete", 100, userid)
+        set_userstats(duration, userid)
+        update_usage_time(userid, duration)
 
         data["transcript"] = Markup(text_withtime.replace("\n", "<br>"))
         data["summary"] = Markup(md.markdown(summary))
@@ -1016,7 +1329,8 @@ def main_process(filepath, id):
             db.session.commit()
 
     except Exception as e:
-        set_status(id, "failed", 0)
+        set_status(id, "failed", 0, userid)
+        debug(traceback.format_exc())
         data["message"] = traceback.format_exc()
         print(traceback.format_exc())
         # db.session.query(Summary).filter(Summary.id == id).delete()
@@ -1081,7 +1395,8 @@ def whisper(input):
 
 
 # ステータス情報格納
-def set_status(id, status, percent):
+def set_status(id, status, percent, userid):
+       
     try:
         summary = db.session.query(Summary).filter_by(id=id).first()
         if summary:
@@ -1091,6 +1406,7 @@ def set_status(id, status, percent):
 
             # 変更をデータベースにコミット
             db.session.commit()
+            clear_user_movies_cache(userid)
             print(f"Status update succeeded: [id]{id}, [stat]{status}")
         else:
             print("No record")
@@ -1098,6 +1414,21 @@ def set_status(id, status, percent):
         print("error", str(e))
         db.session.rollback()
 
+def set_userstats(duration, userid):
+    try:
+        user = db.session.query(User).filter_by(id=userid).first()
+        if user:
+            # レコードの値を更新
+            user.upload_count += 1
+            user.total_upload_duration += int(duration)
+
+            # 変更をデータベースにコミット
+            db.session.commit()
+        else:
+            print("No record")
+    except SQLAlchemyError as e:
+        print("error", str(e))
+        db.session.rollback()
 
 # 要約処理
 def gpt(message):
@@ -1223,11 +1554,13 @@ def delete():
                 if share_record:
                     db.session.delete(share_record)
                     db.session.commit()
+                clear_user_movies_cache(user.id) 
                 return {"status": "success", "message": "delete success."}
             else:
                 return jsonify({"status": "error", "message": "delete error."}), 404
         else:
             return jsonify({"status": "error", "message": "record not found."}), 404
+    
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -1336,6 +1669,8 @@ def changedate():
 
                 # 変更をデータベースにコミット
                 db.session.commit()
+                user = get_userdata()
+                clear_user_movies_cache(user.id)
                 print(f"Status update succeeded: [id]{id}, [date]{date}")
                 return {"success": f"[id]{id}, [date]{date}"}
             else:
@@ -1348,6 +1683,36 @@ def changedate():
 
     return {"error": "error on ID or date"}, 400
 
+# ajax：タイトル変更
+@app.route("/ajax/update_title", methods=["POST"])
+@login_required
+def update_title():
+    data = request.get_json()
+    file_id = data.get("id")
+    new_title = data.get("title")
+
+    if not file_id or not new_title:
+        return jsonify({"status": "error", "message": "Invalid input"}), 400
+
+    try:
+        # ユーザー情報取得
+        user = get_userdata()
+
+        # ユーザーが所有する動画かどうかを確認
+        summary = Summary.query.filter_by(id=file_id, userid=user.id).first()
+        if not summary:
+            return jsonify({"status": "error", "message": "Video not found or not owned by user"}), 404
+
+        # タイトルを更新
+        summary.title = new_title
+        db.session.commit()
+        clear_user_movies_cache(user.id)
+
+        return jsonify({"status": "success", "message": "Title updated successfully"})
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # ajax：コメント変更
 @app.route("/ajax/editcomment", methods=["POST"])
@@ -1446,6 +1811,42 @@ def send(path):
 def pic(path):
     return send_from_directory(app.config["STATIC_FOLDER"], path)
 
+# 管理者向けエンドポイント
+@app.route("/admin")
+@login_required
+def admin_dashboard():
+    user = get_userdata()
+    if user.role != 'admin':
+        abort(403)  # 管理者以外のアクセスを拒否
+    return render_template("admin_dashboard.html")
+
+@app.route("/admin/users")
+@login_required
+def admin_users():
+    user = get_userdata()
+    if user.role != 'admin':
+        abort(403)
+    users = User.query.all()
+    return render_template("admin_users.html", users=users)
+
+@app.route("/admin/update_role", methods=["POST"])
+@login_required
+def update_role():
+    user = get_userdata()
+    if user.role != 'admin':
+        abort(403)
+    
+    user_id = request.form.get('user_id')
+    new_role = request.form.get('role')
+    
+    if user_id and new_role:
+        user_to_update = User.query.get(user_id)
+        if user_to_update:
+            user_to_update.role = new_role
+            db.session.commit()
+            return jsonify({"status": "success"})
+    
+    return jsonify({"status": "error"}), 400
 
 # init
 if __name__ == "__main__":

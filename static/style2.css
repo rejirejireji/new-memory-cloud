@@ -2,6 +2,10 @@ body {
   font-family: 'Noto Sans JP', sans-serif;
 }
 
+#logo_login {
+  width: 200px;
+}
+
 .container-fluid h1,
 .card .card-title {
   color: #666;
@@ -47,7 +51,8 @@ button.btn:focus {
   box-shadow: none;
 }
 
-#btn_comment {
+#btn_comment,
+#edit-title-btn {
   background: none;
   border: none;
 }
@@ -589,12 +594,12 @@ span#username {
 a:has(#icon[data-isadmin="true"])::before {
   content: "\ef3d";
   position: absolute;
-  left: 26px;
+  left: 24px;
   z-index: 9999;
   font-family: 'Material Icons';
-  color: #bda73f;
-  font-size: 24px;
-  top: 8px;
+  color: #d28623;
+  font-size: 31px;
+  top: 4px;
 }
 
 #googlebtn {
@@ -778,4 +783,167 @@ img#logo {
     margin-left: -190px;
     text-align: center;
   }
+}
+
+/* プライバシーポリシー */
+
+#privacy h1 {
+  color: #2c3e50;
+  text-align: center;
+  font-weight: 500;
+  font-size: 2.5em;
+  margin-bottom: 30px;
+}
+
+#privacy h2 {
+  color: #222e3c;
+  border-bottom: 2px solid #3498db;
+  padding-bottom: 10px;
+  margin-top: 30px;
+}
+
+#privacy p {
+  margin-bottom: 15px;
+}
+
+#privacy .content {
+  background-color: white;
+  padding: 30px;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+#privacy .highlight {
+  background-color: #e8f4f8;
+  padding: 15px;
+  border-left: 4px solid #3498db;
+  margin-bottom: 20px;
+}
+
+#privacy ul {
+  padding-left: 20px;
+}
+
+#privacy li {
+  margin-bottom: 10px;
+}
+
+#privacy .footer {
+  text-align: center;
+  margin-top: 30px;
+  color: #7f8c8d;
+  font-size: 0.9em;
+}
+
+div.sidebar-bottomlink {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 10px 0;
+}
+
+.activity-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.activity-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 10px;
+}
+
+.activity-icon .material-icons {
+  font-size: 20px;
+}
+
+.activity-text {
+  flex: 1;
+}
+
+.col-xl-1-5 {
+  flex: 0 0 20%;
+  max-width: 20%;
+}
+
+a#premium-button:hover {
+  background-color: #03203a;
+}
+
+a#premium-button {
+  background-color: #364fa1;
+  border: none;
+  color: white;
+  transition: background-color .3s ease-in-out;
+}
+
+a:hover {
+  color: #fff;
+}
+
+.scrollable-container {
+  height: calc(100vh - 70px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 15px;
+}
+
+/* 左カラムを固定するスタイル */
+.sticky-column {
+  position: sticky;
+  top: 0;
+  height: calc(100vh - 70px);
+  overflow-y: auto;
+  padding-right: 15px;
+}
+
+/* カード内のスクロール調整 */
+.card-body {
+  overflow-y: auto;
+  word-wrap: break-word;
+}
+
+/* メディアクエリ - モバイル表示時の調整 */
+@media (max-width: 1199.98px) {
+  .sticky-column {
+    position: relative;
+    height: auto;
+    padding-right: 0;
+  }
+
+  .scrollable-container {
+    height: auto;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .summary-transcript-container {
+    flex-direction: column;
+  }
+
+  .summary-transcript-container>div {
+    margin-bottom: 1rem;
+  }
+}
+
+/* スクロールバーのカスタマイズ */
+.scrollable-container::-webkit-scrollbar {
+  width: 8px;
+}
+
+.scrollable-container::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.scrollable-container::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+.scrollable-container::-webkit-scrollbar-thumb:hover {
+  background: #555;
 }

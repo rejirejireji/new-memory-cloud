@@ -1,0 +1,27 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<script>
+    localStorage.setItem('page', 'admin');
+</script>
+
+<div class="container-fluid p-0">
+    <h1 class="h3 mb-3">管理者メニュー</h1>
+
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">管理コンソール</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="list-unstyled">
+                        <li><a href="{{ url_for('admin_users') }}">ユーザー管理</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

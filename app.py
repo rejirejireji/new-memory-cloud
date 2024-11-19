@@ -883,10 +883,10 @@ def check_premium_status():
         user = get_userdata()
         reset_monthly_usage(user)
         
-        monthly_upload_time = get_monthly_upload_time(user.id)
+        monthly_upload_time = float(get_monthly_upload_time(user.id))
         one_month_ago = datetime.now().date() - timedelta(days=30)
         
-        needs_premium = user.role == 'standard'
+        needs_premium = (monthly_upload_time > 30 or user.first_login_date <= one_month_ago) and user.role == 'standard'
         needs_additional_time = user.role == 'premium' and monthly_upload_time > (30 + user.additional_hours)
         
         additional_hours_needed = math.ceil((monthly_upload_time - (30 + user.additional_hours)) / 10) if needs_additional_time else 0
@@ -1020,7 +1020,7 @@ def home():
         }
         return descriptions.get(status, status)
 
-    monthly_upload_time = get_monthly_upload_time(user.id) * 60 
+    monthly_upload_time = int(get_monthly_upload_time(user.id) * 60 )
     
     # 初回ログイン日設定（設定されていない場合）
     if user.first_login_date is None:
